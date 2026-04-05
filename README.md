@@ -13,7 +13,7 @@ Final year project workspace for accent-robust speech recognition using the L2-A
 └── src/
 	├── eval/
 	├── notebooks/
-	├── preproc/
+	├── utils/
 	└── training/
 ```
 

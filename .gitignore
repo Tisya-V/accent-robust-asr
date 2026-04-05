@@ -6,6 +6,7 @@ __pypackages__/
 .env
 .venv
 env/
+.vscode/
 
 # Project artifacts
 data/
