@@ -1,129 +1,234 @@
 """Utilities for loading and preprocessing the L2-ARCTIC dataset
 using the processed Hugging Face dataset `KoelLabs/L2Arctic`.
 
-This module exposes two functions:
-
-- load_scripted() -> pandas.DataFrame
-- load_spontaneous() -> pandas.DataFrame
-
-Each returned DataFrame contains:
-- text, ipa (without stress markers), ipa_wstress (original IPA with stress markers)
-- speaker_code, speaker_gender, speaker_native_language
-- duration_s (utterance duration in seconds)
-- text_num_chars, text_num_words, ipa_num_chars
-
-You must be logged into Hugging Face and have accepted the dataset terms
-if required.
+Exposes:
+    load_scripted()       -> pd.DataFrame  (HF, for fine-tuning / WER eval)
+    load_spontaneous()    -> pd.DataFrame  (HF)
+    split_dataset()       -> (train, dev, test) DataFrames
+                             test  = HELD_OUT_SPEAKERS (by speaker, from config)
+                             train/dev = remaining speakers, 85/15 stratified by L1
+    load_probe_utterances() -> list[dict]  (local files, for probing)
+                               returns test-speaker utterances with wav + textgrid paths
 """
 
 from __future__ import annotations
 
 import io
 import wave
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import soundfile as sf
+from tqdm import tqdm
 from datasets import load_dataset, Audio
 from sklearn.model_selection import train_test_split
 
-_DATASET_NAME = "KoelLabs/L2Arctic"
+from src.config import DATASET_NAME, HELD_OUT_SPEAKERS, LOCAL_L2ARCTIC_DIR
 
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _wav_duration_from_bytes(b: bytes) -> float:
-    """Return duration in seconds from a WAV byte string."""
     with wave.open(io.BytesIO(b), "rb") as f:
         return f.getnframes() / float(f.getframerate())
 
 
 def _add_duration(batch):
-    """Datasets map() helper: add a duration_s field based on audio bytes."""
-    durations = []
-    for audio in batch["audio"]:
-        b = audio.get("bytes")
-        if b is not None:
-            durations.append(_wav_duration_from_bytes(b))
-        else:
-            durations.append(None)
-    batch["duration_s"] = durations
+    batch["duration_s"] = [
+        _wav_duration_from_bytes(a["bytes"]) if a.get("bytes") else None
+        for a in batch["audio"]
+    ]
     return batch
 
 
-def _to_pandas_without_audio(hf_split) -> pd.DataFrame:
-    """Convert a HF Dataset split to pandas, dropping the heavy audio column."""
-    return hf_split.remove_columns(["audio"]).to_pandas()
-
-
 def _add_text_stats(df: pd.DataFrame) -> pd.DataFrame:
-    """Add basic text/IPA length statistics to a DataFrame."""
     df = df.copy()
     df["text_num_chars"] = df["text"].str.len()
     df["text_num_words"] = df["text"].str.split().str.len()
-    df["ipa_num_chars"] = df["ipa"].str.len()
+    df["ipa_num_chars"]  = df["ipa"].str.len()
     return df
 
 
 def _load_split(split_name: str, cache_dir: Optional[str] = None) -> pd.DataFrame:
-    """Internal helper to load, clean and format a single split.
-
-    Parameters
-    ----------
-    split_name:
-        One of "scripted" or "spontaneous".
-    cache_dir:
-        Optional cache directory for Hugging Face datasets.
-    """
-    dataset = load_dataset(_DATASET_NAME, cache_dir=cache_dir)
-
-    # Keep audio as bytes to avoid decoding full waveforms
+    dataset = load_dataset(DATASET_NAME, cache_dir=cache_dir)
     dataset = dataset.cast_column("audio", Audio(decode=False))
-
-    # Add duration in seconds
     dataset = dataset.map(_add_duration, batched=True)
 
-    # Convert to pandas
-    hf_split = dataset[split_name]
-    df = hf_split.to_pandas()
-
-    # Preserve IPA with stress, and create a stress-free version
+    df = dataset[split_name].to_pandas()
     df["ipa_wstress"] = df["ipa"]
     df["ipa"] = df["ipa"].str.replace("[ˈˌ]", "", regex=True)
-
-    # Add basic text stats
     df = _add_text_stats(df)
-
     return df
 
 
+# ---------------------------------------------------------------------------
+# Public API — HF loading
+# ---------------------------------------------------------------------------
+
 def load_scripted(cache_dir: Optional[str] = None) -> pd.DataFrame:
-    """Load the scripted split as a preprocessed pandas DataFrame."""
+    """Load the scripted split (HF). Use for fine-tuning and WER evaluation."""
     return _load_split("scripted", cache_dir=cache_dir)
 
 
 def load_spontaneous(cache_dir: Optional[str] = None) -> pd.DataFrame:
-    """Load the spontaneous split as a preprocessed pandas DataFrame."""
+    """Load the spontaneous split (HF)."""
     return _load_split("spontaneous", cache_dir=cache_dir)
 
-def split_dataset(df: pd.DataFrame, test_size: float = 0.15, dev_size: float = 0.15, stratify_col: str = "speaker_native_language", random_state: int = 42) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Stratified train/dev/test split by L1 or speaker."""
-    min_count = df[stratify_col].value_counts().min()
-    
-    if min_count < 6:
-        # Too small to split — return all data as test, empty train/dev
-        empty = pd.DataFrame(columns=df.columns)
-        return empty, empty, df.reset_index(drop=True)
-    
-    
-    train_val, test = train_test_split(df, test_size=test_size, stratify=df[stratify_col], random_state=random_state)
-    train, dev = train_test_split(train_val, test_size=dev_size/(1-test_size), stratify=train_val[stratify_col], random_state=random_state)
-    return train, dev, test
+
+def split_dataset(
+    df: pd.DataFrame,
+    dev_size: float = 0.15,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Split a loaded DataFrame into (train, dev, test).
+
+    test  : rows whose speaker_code is in HELD_OUT_SPEAKERS (config.py)
+            — one speaker per L1, never seen during training
+    train : 85% of remaining rows, stratified by speaker_native_language
+    dev   : 15% of remaining rows, stratified by speaker_native_language
+
+    Parameters
+    ----------
+    df          : output of load_scripted() or load_spontaneous()
+    dev_size    : fraction of non-test rows to use as dev (default 0.15)
+    random_state: for reproducibility
+
+    Returns
+    -------
+    train, dev, test — three DataFrames, reset index
+    """
+    test = df[df["speaker_code"].isin(HELD_OUT_SPEAKERS)].copy().reset_index(drop=True)
+    pool = df[~df["speaker_code"].isin(HELD_OUT_SPEAKERS)].copy()
+
+    if len(pool) == 0:
+        raise ValueError("All rows are in HELD_OUT_SPEAKERS — nothing left for train/dev.")
+
+    # Check we have enough samples per L1 to stratify
+    l1_counts = pool["speaker_native_language"].value_counts()
+    can_stratify = l1_counts.min() >= 2
+    stratify_col = pool["speaker_native_language"] if can_stratify else None
+    if not can_stratify:
+        print("[WARN] Some L1 groups too small to stratify — splitting without stratification")
+
+    train, dev = train_test_split(
+        pool,
+        test_size=dev_size,
+        stratify=stratify_col,
+        random_state=random_state,
+    )
+
+    print(f"Split summary:")
+    print(f"  Train : {len(train):>5} rows  ({len(train)/len(df)*100:.1f}%)")
+    print(f"  Dev   : {len(dev):>5} rows  ({len(dev)/len(df)*100:.1f}%)")
+    print(f"  Test  : {len(test):>5} rows  ({len(test)/len(df)*100:.1f}%)  [{sorted(HELD_OUT_SPEAKERS)}]")
+
+    return train.reset_index(drop=True), dev.reset_index(drop=True), test
+
+
+# ---------------------------------------------------------------------------
+# Public API — local files for probing
+# ---------------------------------------------------------------------------
+
+def load_probe_utterances(
+    local_root: Path = LOCAL_L2ARCTIC_DIR,
+    split: str = "scripted",
+    speakers: Optional[set[str]] = None,
+    max_utts: Optional[int] = None,
+) -> list[dict]:
+    """
+    Walk the local L2-ARCTIC directory and return a list of utterance dicts
+    ready for probe_utils.build_embedding_dataset().
+
+    Each dict contains:
+        audio        : np.ndarray  (float32, 16 kHz mono)
+        textgrid     : str         path to .TextGrid file
+        speaker      : str         speaker code
+        utterance_id : str         e.g. "arctic_a0001"
+
+    Parameters
+    ----------
+    local_root : path to root of local L2-ARCTIC corpus
+                 (expects speaker_dir/wav/*.wav and speaker_dir/textgrid/*.TextGrid)
+    split      : "scripted" | "spontaneous" | "all"
+    speakers   : if given, only load these speaker codes
+                 defaults to HELD_OUT_SPEAKERS (test set) so probing is
+                 always on held-out data unless you explicitly override
+    max_utts   : cap total utterances loaded (useful for quick debugging)
+    """
+    if speakers is None:
+        speakers = HELD_OUT_SPEAKERS
+        print(f"[INFO] load_probe_utterances: defaulting to held-out test speakers: {sorted(speakers)}")
+
+    root       = Path(local_root)
+    utterances = []
+
+    for spk_dir in sorted(root.iterdir()):
+        if not spk_dir.is_dir():
+            continue
+        spk = spk_dir.name
+        if spk not in speakers:
+            continue
+
+        wav_dir = spk_dir / "wav"
+        tg_dir  = spk_dir / "textgrid"
+        if not wav_dir.exists() or not tg_dir.exists():
+            print(f"  [WARN] Missing wav/ or textgrid/ for speaker {spk}, skipping")
+            continue
+
+        wav_files = sorted(wav_dir.glob("*.wav"))
+        for wav_path in tqdm(wav_files, desc=spk, leave=False):
+            uid = wav_path.stem
+
+            if split == "scripted"    and not uid.startswith("arctic_"): continue
+            if split == "spontaneous" and     uid.startswith("arctic_"): continue
+
+            tg_path = tg_dir / (uid + ".TextGrid")
+            if not tg_path.exists():
+                continue
+
+            utterances.append({
+                "wav_path":        str(wav_path),
+                "textgrid":     str(tg_path),
+                "speaker":      spk,
+                "utterance_id": uid,
+            })
+
+            if max_utts and len(utterances) >= max_utts:
+                print(f"[INFO] Reached max_utts={max_utts}, stopping early")
+                return utterances
+
+    print(f"[INFO] Loaded {len(utterances)} utterances from {len(speakers)} speakers (local)")
+    return utterances
+
+
+# ---------------------------------------------------------------------------
+# For testing
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    print("=== HF dataset ===")
     scripted_df = load_scripted()
-    spontaneous_df = load_spontaneous()
-    print("Scripted shape:", scripted_df.shape)
+    print("Scripted shape:  ", scripted_df.shape)
     print("Scripted columns:", scripted_df.columns.tolist())
-    print("Scripted: \n", scripted_df.head())
-    
+    print(scripted_df[["speaker_code", "speaker_native_language", "text"]].head())
+
     train_df, dev_df, test_df = split_dataset(scripted_df)
-    print(f"Train: {len(train_df)}, Dev: {len(dev_df)}, Test: {len(test_df)}")
-    print("L1 balance in test:", test_df["speaker_native_language"].value_counts())
+    print("\nL1 balance — test:")
+    print(test_df["speaker_native_language"].value_counts())
+    print("\nL1 balance — train:")
+    print(train_df["speaker_native_language"].value_counts())
+
+    print("\n=== Local probe utterances (test speakers) ===")
+    probe_utts = load_probe_utterances(
+        local_root=LOCAL_L2ARCTIC_DIR,
+        split="scripted",
+        max_utts=20,
+    )
+    if probe_utts:
+        u = probe_utts[0]
+        print(f"  Sample: speaker={u['speaker']}  id={u['utterance_id']}  "
+              f"wav_path={u['wav_path']}  tg={u['textgrid']}")

@@ -27,3 +27,5 @@ output/*
 
 # Notebook cache
 src/notebooks/.ipynb_checkpoints/
+models/*/checkpoint-*/
+results/*.csv
