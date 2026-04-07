@@ -24,7 +24,7 @@ import numpy as np
 from pathlib import Path
 from collections import defaultdict
 
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 from sklearn.model_selection import GroupKFold
@@ -72,12 +72,8 @@ def run_phoneme_probe(X, y, groups, layer_idx: int, n_folds: int = 5):
         X_tr_s = scaler.fit_transform(X_tr)
         X_te_s = scaler.transform(X_te)
 
-        clf = LogisticRegression(
-            max_iter=1000,
-            C=1.0,
-            solver="lbfgs",
-            multi_class="multinomial",
-            n_jobs=-1,
+        clf = SGDClassifier(
+            max_iter=300, loss="log_loss", random_state=42,
         )
         clf.fit(X_tr_s, y_tr)
         preds = clf.predict(X_te_s)
@@ -188,6 +184,8 @@ def main():
         layer_results = {}
 
         for layer_idx in layer_indices:
+            print(f"     Layer {layer_idx:2d} | probing …")
+
             X, phone_ids, _, speakers = records_to_arrays(records, layer_idx)
 
             # Filter out unknown phones
@@ -197,6 +195,12 @@ def main():
             if len(X) < 50:
                 print(f"    Layer {layer_idx:2d} | skipped (too few samples: {len(X)})")
                 continue
+
+            #subsample if too large (to speed up probing; use fixed seed for reproducibility)
+            if len(X) > 30000:
+                print(f"    Layer {layer_idx:2d} | subsampling to 30k records for faster probing (full set has {len(X)} records)")
+                idx = np.random.RandomState(42).choice(len(X), 30000, replace=False)
+                X, phone_ids, speakers = X[idx], phone_ids[idx], speakers[idx]
 
             result = run_phoneme_probe(X, phone_ids, speakers, layer_idx, args.n_folds)
             layer_results[str(layer_idx)] = result

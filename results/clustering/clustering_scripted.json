@@ -1,0 +1,454 @@
+{
+  "baseline": {
+    "0": {
+      "phoneme": {
+        "silhouette": -0.09571552276611328,
+        "davies_bouldin": 9.543646000829375,
+        "calinski_harabasz": 9.996933657437646,
+        "within_mean": 25.538537979125977,
+        "between_mean": 11.314119338989258,
+        "wb_ratio": 2.2572272055782867,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.005426684860140085,
+        "davies_bouldin": 9.086597381947096,
+        "calinski_harabasz": 39.987844693255724,
+        "within_mean": 26.77772331237793,
+        "between_mean": 8.169472694396973,
+        "wb_ratio": 3.2777786662710082,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.002671833150088787,
+        "davies_bouldin": 8.9432955298226,
+        "calinski_harabasz": 40.65376495300682,
+        "within_mean": 26.794822692871094,
+        "between_mean": 8.267976760864258,
+        "wb_ratio": 3.2407955982293073,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "1": {
+      "phoneme": {
+        "silhouette": -0.05016636103391647,
+        "davies_bouldin": 7.373102164785382,
+        "calinski_harabasz": 14.756586573217833,
+        "within_mean": 25.116703033447266,
+        "between_mean": 13.549715995788574,
+        "wb_ratio": 1.853670072587046,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.023225951939821243,
+        "davies_bouldin": 7.514718950595277,
+        "calinski_harabasz": 55.66862746087941,
+        "within_mean": 26.660490036010742,
+        "between_mean": 9.625225067138672,
+        "wb_ratio": 2.769856273494518,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.02528856322169304,
+        "davies_bouldin": 7.535503409326299,
+        "calinski_harabasz": 56.135694912380664,
+        "within_mean": 26.622896194458008,
+        "between_mean": 9.628520011901855,
+        "wb_ratio": 2.7650039841584513,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "2": {
+      "phoneme": {
+        "silhouette": -0.036951061338186264,
+        "davies_bouldin": 7.177964238927503,
+        "calinski_harabasz": 16.88532906872049,
+        "within_mean": 24.786739349365234,
+        "between_mean": 13.960309028625488,
+        "wb_ratio": 1.775515090571437,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.028795456513762474,
+        "davies_bouldin": 7.326620617615436,
+        "calinski_harabasz": 50.119439032561445,
+        "within_mean": 26.731477737426758,
+        "between_mean": 9.180486679077148,
+        "wb_ratio": 2.9117713114653623,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.028710108250379562,
+        "davies_bouldin": 7.399222324001399,
+        "calinski_harabasz": 49.40255547324279,
+        "within_mean": 26.731481552124023,
+        "between_mean": 9.112839698791504,
+        "wb_ratio": 2.9333865661731116,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "3": {
+      "phoneme": {
+        "silhouette": -0.022555168718099594,
+        "davies_bouldin": 6.531689490561859,
+        "calinski_harabasz": 17.38117633323906,
+        "within_mean": 24.54305076599121,
+        "between_mean": 14.453060150146484,
+        "wb_ratio": 1.6981214020438753,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.02274312637746334,
+        "davies_bouldin": 8.00796749976246,
+        "calinski_harabasz": 39.6213686404551,
+        "within_mean": 26.88641929626465,
+        "between_mean": 8.25844955444336,
+        "wb_ratio": 3.2556255407286145,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.02568015642464161,
+        "davies_bouldin": 8.013552146341523,
+        "calinski_harabasz": 40.21582664057959,
+        "within_mean": 26.858726501464844,
+        "between_mean": 8.309452056884766,
+        "wb_ratio": 3.232310183342492,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "4": {
+      "phoneme": {
+        "silhouette": -0.04351538419723511,
+        "davies_bouldin": 6.352503160272227,
+        "calinski_harabasz": 17.10999239426488,
+        "within_mean": 24.798397064208984,
+        "between_mean": 14.487238883972168,
+        "wb_ratio": 1.7117407438931982,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.02115853875875473,
+        "davies_bouldin": 8.557737699388253,
+        "calinski_harabasz": 33.041525389449376,
+        "within_mean": 26.957006454467773,
+        "between_mean": 7.570925235748291,
+        "wb_ratio": 3.5605960454057253,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.021886903792619705,
+        "davies_bouldin": 8.541635022870134,
+        "calinski_harabasz": 33.21203529549697,
+        "within_mean": 26.956771850585938,
+        "between_mean": 7.567426681518555,
+        "wb_ratio": 3.5622111696728753,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "5": {
+      "phoneme": {
+        "silhouette": -9.831046918407083e-05,
+        "davies_bouldin": 5.831695783796679,
+        "calinski_harabasz": 18.86250575549491,
+        "within_mean": 24.718189239501953,
+        "between_mean": 15.029099464416504,
+        "wb_ratio": 1.6446886453859544,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.019899211823940277,
+        "davies_bouldin": 8.545320210457012,
+        "calinski_harabasz": 31.7811646674672,
+        "within_mean": 26.9320125579834,
+        "between_mean": 7.4165239334106445,
+        "wb_ratio": 3.631352477224212,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.019471678882837296,
+        "davies_bouldin": 8.58734020683901,
+        "calinski_harabasz": 30.91841081966296,
+        "within_mean": 26.953550338745117,
+        "between_mean": 7.348526954650879,
+        "wb_ratio": 3.6678848026387425,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "6": {
+      "phoneme": {
+        "silhouette": 0.007024281192570925,
+        "davies_bouldin": 5.860833451621296,
+        "calinski_harabasz": 17.659687518051623,
+        "within_mean": 24.682483673095703,
+        "between_mean": 14.700484275817871,
+        "wb_ratio": 1.679025208285016,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.023247137665748596,
+        "davies_bouldin": 8.575438819777935,
+        "calinski_harabasz": 32.06273462903398,
+        "within_mean": 27.013181686401367,
+        "between_mean": 7.44681453704834,
+        "wb_ratio": 3.6274814623097167,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.02196977660059929,
+        "davies_bouldin": 8.561963707702885,
+        "calinski_harabasz": 32.50099531548683,
+        "within_mean": 26.983179092407227,
+        "between_mean": 7.469033241271973,
+        "wb_ratio": 3.6126735844881583,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    }
+  },
+  "lora": {
+    "0": {
+      "phoneme": {
+        "silhouette": -0.1230616644024849,
+        "davies_bouldin": 8.919518053546177,
+        "calinski_harabasz": 10.494807456623741,
+        "within_mean": 25.43815803527832,
+        "between_mean": 11.680705070495605,
+        "wb_ratio": 2.177793025485489,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.005240853410214186,
+        "davies_bouldin": 9.117163407870663,
+        "calinski_harabasz": 38.01534102878878,
+        "within_mean": 26.818618774414062,
+        "between_mean": 8.015531539916992,
+        "wb_ratio": 3.345831607156497,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.0007617872324772179,
+        "davies_bouldin": 8.731378935345226,
+        "calinski_harabasz": 41.261772407327285,
+        "within_mean": 26.7958984375,
+        "between_mean": 8.333683967590332,
+        "wb_ratio": 3.2153725221293676,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "1": {
+      "phoneme": {
+        "silhouette": -0.046409834176301956,
+        "davies_bouldin": 7.547821818790344,
+        "calinski_harabasz": 14.662841459628487,
+        "within_mean": 25.12258529663086,
+        "between_mean": 13.353967666625977,
+        "wb_ratio": 1.8812824715321743,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.026053015142679214,
+        "davies_bouldin": 7.351122102452834,
+        "calinski_harabasz": 56.95969339681684,
+        "within_mean": 26.624977111816406,
+        "between_mean": 9.726374626159668,
+        "wb_ratio": 2.7373999187947105,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.026115212589502335,
+        "davies_bouldin": 7.317300527564291,
+        "calinski_harabasz": 57.25469278928796,
+        "within_mean": 26.620925903320312,
+        "between_mean": 9.735424041748047,
+        "wb_ratio": 2.7344392796002324,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "2": {
+      "phoneme": {
+        "silhouette": -0.03468513488769531,
+        "davies_bouldin": 7.230867523114057,
+        "calinski_harabasz": 16.46605550720886,
+        "within_mean": 24.72431755065918,
+        "between_mean": 13.951654434204102,
+        "wb_ratio": 1.7721423410577488,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.027941960841417313,
+        "davies_bouldin": 7.370836056336436,
+        "calinski_harabasz": 50.82145817424446,
+        "within_mean": 26.709854125976562,
+        "between_mean": 9.229483604431152,
+        "wb_ratio": 2.8939705915023173,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.025842422619462013,
+        "davies_bouldin": 7.413665379171593,
+        "calinski_harabasz": 51.97743391964227,
+        "within_mean": 26.706161499023438,
+        "between_mean": 9.307565689086914,
+        "wb_ratio": 2.8692960534607144,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "3": {
+      "phoneme": {
+        "silhouette": -0.04210486635565758,
+        "davies_bouldin": 6.641331152272469,
+        "calinski_harabasz": 16.73164350924793,
+        "within_mean": 24.788820266723633,
+        "between_mean": 14.28437328338623,
+        "wb_ratio": 1.735380319104013,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.022544417530298233,
+        "davies_bouldin": 7.995712300070715,
+        "calinski_harabasz": 40.146492266876464,
+        "within_mean": 26.853723526000977,
+        "between_mean": 8.293270111083984,
+        "wb_ratio": 3.238013855368208,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.02407819777727127,
+        "davies_bouldin": 8.049180220163466,
+        "calinski_harabasz": 41.16016729954157,
+        "within_mean": 26.84416961669922,
+        "between_mean": 8.391037940979004,
+        "wb_ratio": 3.1991476865575037,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "4": {
+      "phoneme": {
+        "silhouette": -0.0041860234923660755,
+        "davies_bouldin": 6.389472100362918,
+        "calinski_harabasz": 17.297858917039445,
+        "within_mean": 24.884309768676758,
+        "between_mean": 14.319780349731445,
+        "wb_ratio": 1.737757784053122,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.020862389355897903,
+        "davies_bouldin": 8.453009283750054,
+        "calinski_harabasz": 33.80174569246193,
+        "within_mean": 26.949928283691406,
+        "between_mean": 7.660528659820557,
+        "wb_ratio": 3.518024601231985,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.02078140340745449,
+        "davies_bouldin": 8.33631392357956,
+        "calinski_harabasz": 33.49948075137265,
+        "within_mean": 26.93108367919922,
+        "between_mean": 7.615076065063477,
+        "wb_ratio": 3.536548216866003,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "5": {
+      "phoneme": {
+        "silhouette": 0.004285183735191822,
+        "davies_bouldin": 5.972929319480267,
+        "calinski_harabasz": 19.726918830380754,
+        "within_mean": 24.553997039794922,
+        "between_mean": 15.017251014709473,
+        "wb_ratio": 1.6350527147574585,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.021287666633725166,
+        "davies_bouldin": 8.575547986971026,
+        "calinski_harabasz": 31.141418046839366,
+        "within_mean": 26.953763961791992,
+        "between_mean": 7.356978893280029,
+        "wb_ratio": 3.6637000530763992,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.019379939883947372,
+        "davies_bouldin": 8.585727706154257,
+        "calinski_harabasz": 31.4248082729685,
+        "within_mean": 26.947214126586914,
+        "between_mean": 7.372004508972168,
+        "wb_ratio": 3.6553442274473045,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    },
+    "6": {
+      "phoneme": {
+        "silhouette": 0.0060836076736450195,
+        "davies_bouldin": 5.958679501435989,
+        "calinski_harabasz": 17.788502388580913,
+        "within_mean": 24.70707893371582,
+        "between_mean": 14.820889472961426,
+        "wb_ratio": 1.6670442741503686,
+        "n_samples": 201520,
+        "n_classes": 39
+      },
+      "l1": {
+        "silhouette": 0.02358713373541832,
+        "davies_bouldin": 8.593973522445676,
+        "calinski_harabasz": 32.74751599744588,
+        "within_mean": 27.00341033935547,
+        "between_mean": 7.506251335144043,
+        "wb_ratio": 3.59745619133832,
+        "n_samples": 201520,
+        "n_classes": 6
+      },
+      "speaker": {
+        "silhouette": 0.02303854003548622,
+        "davies_bouldin": 8.595923437472099,
+        "calinski_harabasz": 32.71531378668588,
+        "within_mean": 26.98514747619629,
+        "between_mean": 7.4779791831970215,
+        "wb_ratio": 3.6086149499896667,
+        "n_samples": 201520,
+        "n_classes": 6
+      }
+    }
+  }
+}

@@ -21,6 +21,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -m src.eval.probing.probe_accent
+python -u -m src.eval.probing.probe_accent
 
 echo "Accent probe evaluation completed."

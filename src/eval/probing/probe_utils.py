@@ -48,17 +48,17 @@ SILENCE_LABELS = {"SIL", "SP", "sil", "sp", "spn", "<eps>", ""}
 # L2-ARCTIC speaker → L1 mapping (all 24 speakers)
 SPEAKER_L1 = {
     "ABA": "Arabic",   "SKA": "Arabic",
-    "MBMPS": "Mandarin", "BWC": "Mandarin",
-    "HJK": "Korean",   "HKK": "Korean",
-    "YDCK": "Mandarin", "YKWK": "Korean",
+    "YBAA": "Arabic",  "ZHAA": "Arabic",
+    "LXC": "Chinese", "NCC": "Chinese",
+    "BWC": "Chinese", "TXHC": "Chinese",
     "ASI": "Hindi",    "RRBI": "Hindi",
     "SVBI": "Hindi",   "TNI": "Hindi",
-    "NCC": "Mandarin", "TXHC": "Mandarin",
+    "HJK": "Korean",   "HKK": "Korean",
+    "YDCK": "Korean", "YKWK": "Korean",
     "EBVS": "Spanish", "ERMS": "Spanish",
+    "MBMPS": "Spanish",  "NJS": "Spanish",
     "HQTV": "Vietnamese", "PNV": "Vietnamese",
     "THV": "Vietnamese", "TLV": "Vietnamese",
-    "YBAA": "Arabic",  "ZHAA": "Arabic",
-    "NJS": "Hindi",    "RKJS": "Hindi",
 }
 
 L1_GROUPS = sorted(set(SPEAKER_L1.values()))

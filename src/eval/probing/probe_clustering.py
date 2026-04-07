@@ -31,8 +31,7 @@ from typing import List
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-
+from matplotlib import colormaps
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler
 
@@ -171,7 +170,7 @@ def make_umap_plot(
     embedding = reducer.fit_transform(X_scaled)
 
     n_classes = len(label_names)
-    cmap = cm.get_cmap("tab20" if n_classes <= 20 else "hsv", n_classes)
+    cmap = colormaps["tab20" if n_classes <= 20 else "hsv"].resampled(n_classes)
     colors = [cmap(i / n_classes) for i in range(n_classes)]
 
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -284,13 +283,13 @@ def main():
                 make_umap_plot(
                     X, l1_ids, L1_GROUPS,
                     title=f"{model_name} | Layer {layer_idx} | Coloured by L1",
-                    out_path=str(out_dir / f"umap_layer{layer_idx}_l1.png"),
+                    out_path=str(out_dir / f"umap_{model_name}_layer{layer_idx}_l1.png"),
                 )
                 # Coloured by phoneme (all)
                 make_umap_plot(
                     X, phone_ids, ARPABET_VOCAB,
                     title=f"{model_name} | Layer {layer_idx} | Coloured by Phoneme",
-                    out_path=str(out_dir / f"umap_layer{layer_idx}_phoneme.png"),
+                    out_path=str(out_dir / f"umap_{model_name}_layer{layer_idx}_phoneme.png"),
                 )
                 # Focus phones subset
                 focus_ids = set(PHONE2ID.get(p, -1) for p in focus_phones) - {-1}
@@ -306,13 +305,13 @@ def main():
                     make_umap_plot(
                         X_f, pid_f_remapped, sorted_labels,
                         title=f"{model_name} | Layer {layer_idx} | Focus phones",
-                        out_path=str(out_dir / f"umap_layer{layer_idx}_focus_phones.png"),
+                        out_path=str(out_dir / f"umap_{model_name}_layer{layer_idx}_focus_phones.png"),
                     )
                     # Also colour by L1 within focus phones
                     make_umap_plot(
                         X_f, l1_ids[mask_focus], L1_GROUPS,
                         title=f"{model_name} | Layer {layer_idx} | Focus phones (by L1)",
-                        out_path=str(out_dir / f"umap_layer{layer_idx}_focus_phones_l1.png"),
+                        out_path=str(out_dir / f"umap_{model_name}_layer{layer_idx}_focus_phones_l1.png"),
                     )
 
         all_results[model_name] = layer_results

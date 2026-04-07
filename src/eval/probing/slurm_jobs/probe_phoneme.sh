@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=probe_clustering
+#SBATCH --job-name=probe_phoneme
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -21,6 +21,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -m src.eval.probing.probe_clustering --umap_layers 0,1,2,3,4,5,6 
+python -u -m src.eval.probing.probe_phoneme
 
-echo "Clustering evaluation completed."
+echo "Phoneme probe evaluation completed."

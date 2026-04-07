@@ -28,7 +28,7 @@ import numpy as np
 from pathlib import Path
 from collections import defaultdict
 
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import GroupKFold
@@ -72,9 +72,8 @@ def run_accent_probe(X, l1_ids, speakers, layer_idx: int, n_folds: int = 5,
         X_tr_s = scaler.fit_transform(X_tr)
         X_te_s = scaler.transform(X_te)
 
-        clf = LogisticRegression(
-            max_iter=1000, C=1.0, solver="lbfgs",
-            multi_class="multinomial", n_jobs=-1,
+        clf = SGDClassifier(
+            max_iter=300, loss="log_loss", random_state=42,
         )
         clf.fit(X_tr_s, y_tr)
         all_preds.extend(clf.predict(X_te_s).tolist())
@@ -189,11 +188,29 @@ def main():
         )
         print(f"      {len(records)} records")
 
+        # After building records, before probing
+        print("\n      [DEBUG] Unique speakers, L1 IDs, and L1 labels in dataset:")
+        print(set(r.speaker_id for r in records))
+        print(set(r.l1_id for r in records))
+        print(set(r.l1_label for r in records))
+
         print(f"[4/4] Running accent probes …")
         layer_results = {}
 
         for layer_idx in layer_indices:
+            print(f"    Layer {layer_idx:2d} | probing …")
+
             X, phone_ids, l1_ids, speakers = records_to_arrays(records, layer_idx)
+
+            #subsample if too large (to speed up probing; use fixed seed for reproducibility)
+            if len(X) > 30000:
+                print(f"     Layer {layer_idx:2d} | subsampling to 30k records for faster probing (full set has {len(X)} records)")
+                idx = np.random.RandomState(42).choice(len(X), 30000, replace=False)
+                X, phone_ids, l1_ids, speakers = X[idx], phone_ids[idx], l1_ids[idx], speakers[idx]
+
+            print(f"  l1_ids unique values: {np.unique(l1_ids)}")
+            print(f"  l1_ids value counts:  {np.bincount(l1_ids)}")
+            print(f"  speakers unique:      {np.unique(speakers)}")
 
             # --- Global accent probe ---
             global_result = run_accent_probe(

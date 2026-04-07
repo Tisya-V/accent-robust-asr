@@ -85,8 +85,7 @@ def run_speaker_probe(
         X_te_s = scaler.transform(X_te)
 
         clf = LogisticRegression(
-            max_iter=1000, C=1.0, solver="lbfgs",
-            multi_class="multinomial", n_jobs=-1,
+            max_iter=1000, C=1.0,
         )
         clf.fit(X_tr_s, y_tr)
         all_preds.extend(clf.predict(X_te_s).tolist())
@@ -216,7 +215,14 @@ def main():
         layer_results = {}
 
         for layer_idx in layer_indices:
+            print(f"    Layer {layer_idx:2d} | probing …")
             X, _, _, speakers = records_to_arrays(records, layer_idx)
+            
+            #subsample if too large (to speed up probing; use fixed seed for reproducibility)
+            if len(X) > 30000:
+                idx = np.random.RandomState(42).choice(len(X), 30000, replace=False)
+                X, speakers = X[idx], speakers[idx]
+
             n_speakers = len(np.unique(speakers))
 
             result = run_speaker_probe(X, speakers, layer_idx, args.n_folds)

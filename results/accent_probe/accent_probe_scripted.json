@@ -1,0 +1,118 @@
+{
+  "baseline": {
+    "0": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "1": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "2": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "3": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "4": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "5": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "6": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    }
+  },
+  "lora": {
+    "0": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "1": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "2": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "3": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "4": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "5": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    },
+    "6": {
+      "global": {
+        "accuracy": 0.0,
+        "macro_f1": 0.0,
+        "n_samples": 30000
+      },
+      "chance_accuracy": 0.16666666666666666
+    }
+  }
+}

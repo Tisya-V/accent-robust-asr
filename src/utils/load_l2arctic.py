@@ -190,8 +190,12 @@ def load_probe_utterances(
             if not tg_path.exists():
                 continue
 
+            text_path = spk_dir / "transcript" / f"{uid}.txt"
+            text = text_path.read_text().strip() if text_path.exists() else None
+
             utterances.append({
-                "wav_path":        str(wav_path),
+                "wav_path":     str(wav_path),
+                "text":         text,
                 "textgrid":     str(tg_path),
                 "speaker":      spk,
                 "utterance_id": uid,
@@ -230,5 +234,5 @@ if __name__ == "__main__":
     )
     if probe_utts:
         u = probe_utts[0]
-        print(f"  Sample: speaker={u['speaker']}  id={u['utterance_id']}  "
+        print(f"  Sample: speaker={u['speaker']}  text={u['text']} uid={u['utterance_id']}  "
               f"wav_path={u['wav_path']}  tg={u['textgrid']}")
