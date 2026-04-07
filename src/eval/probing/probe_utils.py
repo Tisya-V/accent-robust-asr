@@ -20,14 +20,16 @@ from typing import List, Tuple, Dict, Optional
 import librosa
 import soundfile as sf
 from tqdm import tqdm
+from src.config import (
+    SPEAKER_L1, L1_2_ID, SILENCE_LABELS, 
+    ENCODER_FRAME_RATE, WHISPER_HIDDEN_DIM, WHISPER_N_ENCODER_LAYERS
+)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-ENCODER_FRAME_RATE = 50          # Whisper: 50 Hz (20ms per frame)
-WHISPER_HIDDEN_DIM = 512         # whisper-small
-WHISPER_N_ENCODER_LAYERS = 6     # whisper-small has 6 encoder transformer layers
+
 
 # 39 standard ARPAbet phones (excluding silence markers)
 ARPABET_VOCAB = [
@@ -42,28 +44,6 @@ ARPABET_VOCAB = [
 PHONE2ID = {p: i for i, p in enumerate(ARPABET_VOCAB)}
 NUM_PHONES = len(ARPABET_VOCAB)
 
-# Silence / pause tokens to skip
-SILENCE_LABELS = {"SIL", "SP", "sil", "sp", "spn", "<eps>", ""}
-
-# L2-ARCTIC speaker → L1 mapping (all 24 speakers)
-SPEAKER_L1 = {
-    "ABA": "Arabic",   "SKA": "Arabic",
-    "YBAA": "Arabic",  "ZHAA": "Arabic",
-    "LXC": "Chinese", "NCC": "Chinese",
-    "BWC": "Chinese", "TXHC": "Chinese",
-    "ASI": "Hindi",    "RRBI": "Hindi",
-    "SVBI": "Hindi",   "TNI": "Hindi",
-    "HJK": "Korean",   "HKK": "Korean",
-    "YDCK": "Korean", "YKWK": "Korean",
-    "EBVS": "Spanish", "ERMS": "Spanish",
-    "MBMPS": "Spanish",  "NJS": "Spanish",
-    "HQTV": "Vietnamese", "PNV": "Vietnamese",
-    "THV": "Vietnamese", "TLV": "Vietnamese",
-}
-
-L1_GROUPS = sorted(set(SPEAKER_L1.values()))
-L1_2_ID   = {l1: i for i, l1 in enumerate(L1_GROUPS)}
-NUM_L1S   = len(L1_GROUPS)
 
 # Phonological feature matrix: (NUM_PHONES, NUM_FEATURES)
 # Features: [voiced, nasal, fricative, affricate, stop, approximant,

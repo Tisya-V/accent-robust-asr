@@ -57,11 +57,12 @@ class L2ArcticDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 LORA_CONFIG = LoraConfig(
-    task_type      = TaskType.SEQ_2_SEQ_LM,
+    # task_type      = TaskType.SEQ_2_SEQ_LM,
     r              = 8,
     lora_alpha     = 16,
     lora_dropout   = 0.05,
     target_modules = ["q_proj", "v_proj"],
+    inference_mode = False,
 )
 
 
@@ -78,7 +79,7 @@ def train(args):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Data -----------------------------------------------------------
-    print("\\nLoading utterances ...")
+    print("\nLoading utterances ...")
     all_utts = load_probe_utterances(
         local_root = args.data_root,
         split      = "scripted",
@@ -104,7 +105,7 @@ def train(args):
         batch_size  = args.batch_size,
         shuffle     = True,
         collate_fn  = collator,
-        num_workers = 2,
+        # num_workers = 2,
         pin_memory  = (device == "cuda"),
     )
     dev_loader = DataLoader(
@@ -112,7 +113,7 @@ def train(args):
         batch_size  = args.batch_size,
         shuffle     = False,
         collate_fn  = collator,
-        num_workers = 2,
+        # num_workers = 2,
         pin_memory  = (device == "cuda"),
     )
 
@@ -124,6 +125,7 @@ def train(args):
         lambda_feat = args.lambda_feat,
     )
 
+    print("Applying LoRA ...")
     # Freeze backbone, apply LoRA
     for p in model.whisper.parameters():
         p.requires_grad = False
@@ -136,6 +138,7 @@ def train(args):
     for p in model.feat_head.parameters():
         p.requires_grad = True
 
+    print("Moving model to device ...")
     model = model.to(device)
 
     # ---- Optimiser ------------------------------------------------------
@@ -165,6 +168,7 @@ def train(args):
     best_dev_loss = float("inf")
     history = []
 
+    print("\nStarting training ...")
     for epoch in range(1, args.epochs + 1):
 
         # --- Train ---
@@ -259,7 +263,7 @@ def train(args):
     # ---- Persist history ------------------------------------------------
     history_path = out_dir / "history.json"
     with open(history_path, "w") as f:
-        json.dump({"run": args.run_name, "args": vars(args), "history": history}, f, indent=2)
+        json.dump({"run": args.run_name, "args": vars(args), "history": history}, f, indent=2, default=str)
     print(f"\\nDone. History -> {history_path}")
 
     if use_wandb:

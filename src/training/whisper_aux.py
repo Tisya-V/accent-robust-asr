@@ -189,8 +189,8 @@ class WhisperWithAuxHeads(nn.Module):
 
         # Load base Whisper
         self.whisper = WhisperForConditionalGeneration.from_pretrained(model_name)
-
         hidden_dim = self.whisper.config.d_model   # 512 for whisper-small
+        print("Whisper loaded")
 
         # Aux heads
         self.ctc_head  = CTCPhonemeHead(hidden_dim=hidden_dim)
@@ -200,7 +200,10 @@ class WhisperWithAuxHeads(nn.Module):
         self._ctc_hidden:  Optional[torch.Tensor] = None
         self._feat_hidden: Optional[torch.Tensor] = None
 
+        print("Registering hooks ...")
         self._register_hooks()
+
+        print(f"Initialized WhisperWithAuxHeads with lambda_ctc={lambda_ctc}, lambda_feat={lambda_feat}")
 
     # ------------------------------------------------------------------
     # Hook registration
@@ -273,7 +276,7 @@ class WhisperWithAuxHeads(nn.Module):
         
 
         # --- Main Whisper forward (captures hooks as side-effect) ---
-        whisper_out = self.whisper(
+        whisper_out = self.whisper.base_model(
             input_features        = input_features,
             decoder_input_ids     = labels[:, :-1].clamp(min=0),  # shift right, no -100
             output_hidden_states  = False,

@@ -2,126 +2,151 @@
 probe_accent.py
 Linear probing for ACCENT / L1 IDENTITY from Whisper encoder layers.
 
-For each encoder layer (0-6) of each model:
-  - Trains a logistic regression on segment-level embeddings (same embeddings
-    as the phoneme probe, but now predicting L1 rather than phoneme)
-  - Uses speaker-held-out cross-validation (same speaker never in train AND test)
-  - Also measures how much accent information is recoverable when the probe
-    is conditioned on phoneme identity (i.e. within-phoneme accent separability)
-
-The key diagnostic question:
-    "At which layers is L1 accent linearly decodable,
-     and does this overlap with where phoneme info is strongest?"
+Key changes vs previous version:
+  - --models  accepts a comma-separated list of keys from MODEL_REGISTRY
+    (e.g. --models baseline,baseline_lora,ctc_aux)
+  - Each model is saved to its own JSON file so runs are fully independent
+    and can be parallelised across jobs
+  - Output: results/accent_probe/accent_probe_{model_key}_{split}.json
 
 Usage:
-    python probe_accent.py \
-        --data_root /path/to/l2arctic \
-        --baseline_model openai/whisper-small \
-        --lora_model   /path/to/lora-checkpoint \
-        --split        scripted \
-        --output_dir   results/accent_probe \
-        [--max_utts 500]
+    # Single model (parallelisable)
+    python probe_accent.py --models baseline   --split scripted
+    python probe_accent.py --models ctc_aux    --split scripted
+
+    # Multiple models in one run (sequential)
+    python probe_accent.py --models baseline,baseline_lora,ctc_aux --split scripted
+
+    # With within-phoneme accent probe
+    python probe_accent.py --models ctc_aux --split scripted --within_phoneme
 """
 
 import argparse
 import numpy as np
 from pathlib import Path
-from collections import defaultdict
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import GroupKFold
 import torch
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-from src.eval.probing.probe_utils import (
-    L1_GROUPS, L1_2_ID, NUM_L1S, ARPABET_VOCAB, WHISPER_N_ENCODER_LAYERS,
-    build_embedding_dataset, records_to_arrays, save_results,
-    SPEAKER_L1,
-)
-from src.utils.load_l2arctic import load_probe_utterances
-from src.config import LOCAL_L2ARCTIC_DIR
 
+from src.eval.probing.probe_utils import (
+    ARPABET_VOCAB, WHISPER_N_ENCODER_LAYERS,
+    build_embedding_dataset, records_to_arrays, save_results,
+)
+from src.utils.model_loader import get_model_registry
+from src.utils.load_l2arctic import load_probe_utterances
+from src.config import LOCAL_L2ARCTIC_DIR, NUM_L1S, PROBE_PHONES
 
 
 # ---------------------------------------------------------------------------
 # Probe helpers
 # ---------------------------------------------------------------------------
 
-def run_accent_probe(X, l1_ids, speakers, layer_idx: int, n_folds: int = 5,
-                     label: str = "global") -> dict:
-    """
-    Speaker-held-out L1 classification probe.
-    `label` is just for display (e.g. 'global' or phone-specific).
-    """
-    gkf = GroupKFold(n_splits=n_folds)
+def run_accent_probe(X, l1_ids, speakers, layer_idx: int,
+                     n_folds: int = 5, label: str = "global") -> dict:
     all_preds, all_true = [], []
-
-    # Need at least n_folds unique speakers
-    unique_spk = np.unique(speakers)
+    unique_spk   = np.unique(speakers)
     actual_folds = min(n_folds, len(unique_spk))
     if actual_folds < 2:
         return {"accuracy": float("nan"), "macro_f1": float("nan"), "n_samples": len(X)}
 
-    gkf_actual = GroupKFold(n_splits=actual_folds)
-    for _, (train_idx, test_idx) in enumerate(gkf_actual.split(X, l1_ids, speakers)):
-        X_tr, X_te = X[train_idx], X[test_idx]
-        y_tr, y_te = l1_ids[train_idx], l1_ids[test_idx]
-
+    gkf = GroupKFold(n_splits=actual_folds)
+    for _, (train_idx, test_idx) in enumerate(gkf.split(X, l1_ids, speakers)):
         scaler = StandardScaler()
-        X_tr_s = scaler.fit_transform(X_tr)
-        X_te_s = scaler.transform(X_te)
-
-        clf = SGDClassifier(
-            max_iter=300, loss="log_loss", random_state=42,
-        )
-        clf.fit(X_tr_s, y_tr)
-        all_preds.extend(clf.predict(X_te_s).tolist())
-        all_true.extend(y_te.tolist())
+        X_tr = scaler.fit_transform(X[train_idx])
+        X_te = scaler.transform(X[test_idx])
+        clf  = SGDClassifier(max_iter=300, loss="log_loss", random_state=42)
+        clf.fit(X_tr, l1_ids[train_idx])
+        all_preds.extend(clf.predict(X_te).tolist())
+        all_true.extend(l1_ids[test_idx].tolist())
 
     all_preds = np.array(all_preds)
     all_true  = np.array(all_true)
-
-    acc = accuracy_score(all_true, all_preds)
-    mf1 = f1_score(all_true, all_preds, average="macro", zero_division=0)
-
     return {
-        "accuracy":  float(acc),
-        "macro_f1":  float(mf1),
+        "accuracy":  float(accuracy_score(all_true, all_preds)),
+        "macro_f1":  float(f1_score(all_true, all_preds, average="macro", zero_division=0)),
         "n_samples": int(len(all_true)),
     }
 
 
-def run_within_phoneme_accent_probe(
-    X, phone_ids, l1_ids, speakers, layer_idx: int,
-    min_samples_per_phone: int = 30, n_folds: int = 5,
-) -> dict:
-    """
-    For each phoneme class, run an accent probe on just that phoneme's embeddings.
-    This tests whether L1 can be decoded even when phoneme class is controlled for —
-    i.e. whether accent and phoneme representations are entangled at this layer.
-
-    Returns: dict mapping phone label → {accuracy, macro_f1, n_samples}
-    """
+def run_within_phoneme_accent_probe(X, phone_ids, l1_ids, speakers, layer_idx: int,
+                                    min_samples: int = 30, n_folds: int = 5) -> dict:
     per_phone = {}
-    unique_phones = np.unique(phone_ids)
-    for pid in unique_phones:
-        mask = phone_ids == pid
-        if mask.sum() < min_samples_per_phone:
-            continue
+    for pid in np.unique(phone_ids):
         phone_label = ARPABET_VOCAB[pid]
-        result = run_accent_probe(
-            X[mask], l1_ids[mask], speakers[mask],
-            layer_idx, n_folds=n_folds,
-            label=phone_label,
+        if phone_label not in PROBE_PHONES:
+            continue
+        mask = phone_ids == pid
+        if mask.sum() < min_samples:
+            continue
+        per_phone[phone_label] = run_accent_probe(
+            X[mask], l1_ids[mask], speakers[mask], layer_idx, n_folds=n_folds,
         )
-        per_phone[phone_label] = result
-
     return per_phone
 
 
-def chance_accuracy(n_classes: int) -> float:
-    return 1.0 / n_classes
+# ---------------------------------------------------------------------------
+# Per-model probe runner
+# ---------------------------------------------------------------------------
+
+def probe_model(model_key, model, processor, utterances, layer_indices,
+                    n_folds, within_phoneme, device, output_dir, split):
+    """Run the full accent probe for a single model and save its own JSON."""
+    out_path = Path(output_dir) / f"accent_probe_{model_key}_{split}.json"
+    if out_path.exists():
+        print(f"  [skip] {out_path} already exists — delete to re-run")
+        return
+
+    chance = 1.0 / NUM_L1S
+    print(f"  Chance accuracy (1/{NUM_L1S}) = {chance:.3f}")
+
+    print(f"  Extracting hidden states …")
+    records = build_embedding_dataset(
+        model=model, processor=processor,
+        utterances=utterances, layer_indices=layer_indices, device=device,
+    )
+    print(f"  {len(records)} records")
+
+    layer_results = {}
+    for layer_idx in layer_indices:
+        X, phone_ids, l1_ids, speakers = records_to_arrays(records, layer_idx)
+
+        # Subsample if too large — stratified by speaker
+        if len(X) > 30000:
+            from sklearn.model_selection import train_test_split
+            _, X, _, phone_ids, _, l1_ids, _, speakers = train_test_split(
+                X, phone_ids, l1_ids, speakers,
+                test_size=30000, random_state=42, stratify=speakers,
+            )
+
+        global_result = run_accent_probe(X, l1_ids, speakers, layer_idx, n_folds)
+        print(f"  Layer {layer_idx:2d} | acc={global_result['accuracy']:.3f}"
+              f"  macro-F1={global_result['macro_f1']:.3f}"
+              f"  (chance={chance:.3f})")
+
+        layer_entry = {"global": global_result, "chance_accuracy": chance}
+
+        if within_phoneme:
+            wp      = run_within_phoneme_accent_probe(X, phone_ids, l1_ids, speakers, layer_idx, n_folds=n_folds)
+            wp_accs = [v["accuracy"] for v in wp.values() if not np.isnan(v["accuracy"])]
+            mean_wp = float(np.mean(wp_accs)) if wp_accs else float("nan")
+            print(f"             within-phoneme mean acc={mean_wp:.3f}")
+            layer_entry["within_phoneme"]          = wp
+            layer_entry["mean_within_phoneme_acc"] = mean_wp
+
+        layer_results[str(layer_idx)] = layer_entry
+
+    save_results(layer_results, str(out_path))
+    print(f"  Saved → {out_path}")
+
+    # Summary
+    print(f"  {'Layer':>6}  {'Accuracy':>10}  {'MacroF1':>10}")
+    for li in layer_indices:
+        acc = layer_results[str(li)]["global"]["accuracy"]
+        mf1 = layer_results[str(li)]["global"]["macro_f1"]
+        print(f"  {li:>6}  {acc:>10.3f}  {mf1:>10.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -129,137 +154,63 @@ def chance_accuracy(n_classes: int) -> float:
 # ---------------------------------------------------------------------------
 
 def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     parser = argparse.ArgumentParser(description="Accent/L1 linear probe on Whisper encoder")
-    parser.add_argument("--data_root",       default=LOCAL_L2ARCTIC_DIR)
-    parser.add_argument("--baseline_model",  default="openai/whisper-small")
-    parser.add_argument("--lora_model",      default="models/baseline_loraft")
-    parser.add_argument("--split",           default="scripted",
-                        choices=["scripted","spontaneous","all"])
-    parser.add_argument("--output_dir",      default="results/accent_probe")
-    parser.add_argument("--layers",          default=None)
-    parser.add_argument("--max_utts",        type=int, default=None)
-    parser.add_argument("--n_folds",         type=int, default=5)
-    parser.add_argument("--within_phoneme",  action="store_true",
-                        help="Also run per-phoneme accent probes (more expensive)")
+    parser.add_argument("--data_root",            default=LOCAL_L2ARCTIC_DIR)
+    parser.add_argument("--models",               default="baseline",
+                        help=f"Comma-separated model keys, options: {get_model_registry(device).keys()}")
+    parser.add_argument("--split",                default="scripted",
+                        choices=["scripted", "spontaneous", "all"])
+    parser.add_argument("--output_dir",           default="results/accent_probe")
+    parser.add_argument("--layers",               default=None,
+                        help="Comma-separated layer indices, default=all")
+    parser.add_argument("--max_utts_per_speaker", type=int, default=50)
+    parser.add_argument("--n_folds",              type=int, default=5)
+    parser.add_argument("--within_phoneme",       action="store_true")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("=== Accent Probe ===")
-    print(f"Running on device: {device}")
+    print(f"=== Accent Probe === device={device}")
 
     layer_indices = (
         [int(x) for x in args.layers.split(",")]
-        if args.layers
-        else list(range(WHISPER_N_ENCODER_LAYERS + 1))
+        if args.layers else list(range(WHISPER_N_ENCODER_LAYERS + 1))
     )
+    model_keys = [k.strip() for k in args.models.split(",")]
+    registry   = get_model_registry(device)
 
-    print(f"\n[1/4] Loading utterances (split={args.split}) …")
+    for key in model_keys:
+        if key not in registry:
+            raise ValueError(f"Unknown model key: '{key}'. Available: {list(registry.keys())}")
+
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[1] Loading utterances (split={args.split}) …")
     utterances = load_probe_utterances(
-        local_root=args.data_root,
-        split=args.split,
-        max_utts=args.max_utts,
+        local_root=args.data_root, split=args.split,
+        max_utts_per_speaker=args.max_utts_per_speaker, speakers={"all"},
     )
-    print(f"      Found {len(utterances)} utterances")
+    print(f"    Found {len(utterances)} utterances")
 
-    models_to_eval = {"baseline": args.baseline_model}
-    if args.lora_model:
-        models_to_eval["lora"] = args.lora_model
-
-    all_results = {}
-    chance = chance_accuracy(NUM_L1S)
-    print(f"      Chance accuracy (1/{NUM_L1S} L1s) = {chance:.3f}")
-
-    for model_name, model_path in models_to_eval.items():
-        print(f"\n[2/4] Model: {model_name}")
-        processor = WhisperProcessor.from_pretrained("openai/whisper-small")
-        base = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")
-
-        if model_name == "lora" and args.lora_model:
-            from peft import PeftModel
-            base = PeftModel.from_pretrained(base, model_path)
-            base = base.merge_and_unload()
-        base = base.to(device)
-
-        print("[3/4] Extracting hidden states …")
-        records = build_embedding_dataset(
-            model=base, processor=processor,
-            utterances=utterances, layer_indices=layer_indices,
-            device=device,
+    for key in model_keys:
+        print(f"\n[Model: {key}]")
+        model, processor = registry[key]["loader"]()
+        probe_model(
+            model_key      = key,
+            model          = model,
+            processor      = processor,
+            utterances     = utterances,
+            layer_indices  = layer_indices,
+            n_folds        = args.n_folds,
+            within_phoneme = args.within_phoneme,
+            device         = device,
+            output_dir     = args.output_dir,
+            split          = args.split,
         )
-        print(f"      {len(records)} records")
+        del model
+        torch.cuda.empty_cache()
 
-        # After building records, before probing
-        print("\n      [DEBUG] Unique speakers, L1 IDs, and L1 labels in dataset:")
-        print(set(r.speaker_id for r in records))
-        print(set(r.l1_id for r in records))
-        print(set(r.l1_label for r in records))
-
-        print(f"[4/4] Running accent probes …")
-        layer_results = {}
-
-        for layer_idx in layer_indices:
-            print(f"    Layer {layer_idx:2d} | probing …")
-
-            X, phone_ids, l1_ids, speakers = records_to_arrays(records, layer_idx)
-
-            #subsample if too large (to speed up probing; use fixed seed for reproducibility)
-            if len(X) > 30000:
-                print(f"     Layer {layer_idx:2d} | subsampling to 30k records for faster probing (full set has {len(X)} records)")
-                idx = np.random.RandomState(42).choice(len(X), 30000, replace=False)
-                X, phone_ids, l1_ids, speakers = X[idx], phone_ids[idx], l1_ids[idx], speakers[idx]
-
-            print(f"  l1_ids unique values: {np.unique(l1_ids)}")
-            print(f"  l1_ids value counts:  {np.bincount(l1_ids)}")
-            print(f"  speakers unique:      {np.unique(speakers)}")
-
-            # --- Global accent probe ---
-            global_result = run_accent_probe(
-                X, l1_ids, speakers, layer_idx, args.n_folds
-            )
-            print(f"    Layer {layer_idx:2d} | acc={global_result['accuracy']:.3f}"
-                  f"  macro-F1={global_result['macro_f1']:.3f}"
-                  f"  (chance={chance:.3f})")
-
-            layer_entry = {
-                "global":         global_result,
-                "chance_accuracy": chance,
-            }
-
-            # --- Within-phoneme accent probe (optional, expensive) ---
-            if args.within_phoneme:
-                wp = run_within_phoneme_accent_probe(
-                    X, phone_ids, l1_ids, speakers, layer_idx, n_folds=args.n_folds
-                )
-                # Compute mean within-phoneme accuracy (where computable)
-                wp_accs = [v["accuracy"] for v in wp.values()
-                           if not np.isnan(v["accuracy"])]
-                mean_wp = float(np.mean(wp_accs)) if wp_accs else float("nan")
-                print(f"             within-phoneme mean acc={mean_wp:.3f}")
-                layer_entry["within_phoneme"] = wp
-                layer_entry["mean_within_phoneme_acc"] = mean_wp
-
-            layer_results[str(layer_idx)] = layer_entry
-
-        all_results[model_name] = layer_results
-        del base
-
-    out_path = Path(args.output_dir) / f"accent_probe_{args.split}.json"
-    save_results(all_results, str(out_path))
-    print(f"\nDone. Results → {out_path}")
-
-    # Summary table
-    print("\n=== Summary: Accent Probe Accuracy by Layer ===")
-    header = f"{'Layer':>6}" + "".join(f"  {m:>14}" for m in all_results)
-    print(header)
-    for li in layer_indices:
-        row = f"{li:>6}"
-        for m in all_results:
-            val = all_results[m].get(str(li), {}).get("global", {}).get("accuracy", float("nan"))
-            row += f"  {val:>14.3f}"
-        print(row)
-    print(f"  (chance = {chance:.3f})")
+    print("\nAll done.")
 
 
 if __name__ == "__main__":
     main()
-

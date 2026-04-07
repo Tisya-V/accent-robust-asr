@@ -24,7 +24,7 @@ from tqdm import tqdm
 from datasets import load_dataset, Audio
 from sklearn.model_selection import train_test_split
 
-from src.config import DATASET_NAME, HELD_OUT_SPEAKERS, LOCAL_L2ARCTIC_DIR
+from src.config import DATASET_NAME, HELD_OUT_SPEAKERS, LOCAL_L2ARCTIC_DIR, SPEAKERS
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +138,7 @@ def load_probe_utterances(
     split: str = "scripted",
     speakers: Optional[set[str]] = None,
     max_utts: Optional[int] = None,
+    max_utts_per_speaker: Optional[int] = None,
 ) -> list[dict]:
     """
     Walk the local L2-ARCTIC directory and return a list of utterance dicts
@@ -158,10 +159,15 @@ def load_probe_utterances(
                  defaults to HELD_OUT_SPEAKERS (test set) so probing is
                  always on held-out data unless you explicitly override
     max_utts   : cap total utterances loaded (useful for quick debugging)
+    max_utts_per_speaker : cap utterances per speaker 
+    you should set either max_utts or max_utts_per_speaker, not both
     """
     if speakers is None:
         speakers = HELD_OUT_SPEAKERS
         print(f"[INFO] load_probe_utterances: defaulting to held-out test speakers: {sorted(speakers)}")
+
+    if speakers == {"all"}:
+        speakers = SPEAKERS
 
     root       = Path(local_root)
     utterances = []
@@ -180,6 +186,8 @@ def load_probe_utterances(
             continue
 
         wav_files = sorted(wav_dir.glob("*.wav"))
+        if max_utts_per_speaker:
+            wav_files = wav_files[:max_utts_per_speaker]
         for wav_path in tqdm(wav_files, desc=spk, leave=False):
             uid = wav_path.stem
 

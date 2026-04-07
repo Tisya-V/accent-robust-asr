@@ -19,7 +19,7 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -m src.training.naive_lora_ft \
+python -u -m src.training.naive_lora_ft \
     --output_dir models/baseline_loraft
     # --epochs 5 \
     # --batch_size 8 \

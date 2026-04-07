@@ -2,56 +2,56 @@
   "baseline": {
     "0": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.13033333333333333,
+        "macro_f1": 0.13655173596201833,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "1": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.1021,
+        "macro_f1": 0.12084502822094716,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "2": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.0836,
+        "macro_f1": 0.0932210914721398,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "3": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.12263333333333333,
+        "macro_f1": 0.12442596069127058,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "4": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.1363,
+        "macro_f1": 0.13562493796828154,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "5": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.24053333333333332,
+        "macro_f1": 0.2499579359651287,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "6": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.4079333333333333,
+        "macro_f1": 0.41962420930036953,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
@@ -60,56 +60,56 @@
   "lora": {
     "0": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.13033333333333333,
+        "macro_f1": 0.13655173596201833,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "1": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.10313333333333333,
+        "macro_f1": 0.12186135507056828,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "2": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.08803333333333334,
+        "macro_f1": 0.0964722987590889,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "3": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.12543333333333334,
+        "macro_f1": 0.12440325963154945,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "4": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.13896666666666666,
+        "macro_f1": 0.13834552107670153,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "5": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.2517,
+        "macro_f1": 0.26236655444270107,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666
     },
     "6": {
       "global": {
-        "accuracy": 0.0,
-        "macro_f1": 0.0,
+        "accuracy": 0.4433,
+        "macro_f1": 0.4536883997079108,
         "n_samples": 30000
       },
       "chance_accuracy": 0.16666666666666666

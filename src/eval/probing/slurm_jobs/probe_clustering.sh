@@ -21,6 +21,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.probing.probe_clustering --umap_layers 0,1,2,3,4,5,6 
+python -u -m src.eval.probing.probe_clustering "$@"
 
 echo "Clustering evaluation completed."

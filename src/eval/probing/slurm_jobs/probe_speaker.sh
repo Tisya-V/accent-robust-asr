@@ -21,6 +21,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.probing.probe_speaker
+python -u -m src.eval.probing.probe_speaker "$@"
 
 echo "Speaker probe evaluation completed."
