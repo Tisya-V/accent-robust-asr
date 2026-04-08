@@ -28,4 +28,6 @@ output/*
 # Notebook cache
 src/notebooks/.ipynb_checkpoints/
 models/*/checkpoint-*/
+
+# Remove results from gitignore whilst we're still cooking
 results/
