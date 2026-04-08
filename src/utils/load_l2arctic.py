@@ -1,246 +1,286 @@
-"""Utilities for loading and preprocessing the L2-ARCTIC dataset
-using the processed Hugging Face dataset `KoelLabs/L2Arctic`.
+"""
+src/utils/load_l2arctic.py
+Local L2-ARCTIC data loader — single source of truth for all scripts.
 
-Exposes:
-    load_scripted()       -> pd.DataFrame  (HF, for fine-tuning / WER eval)
-    load_spontaneous()    -> pd.DataFrame  (HF)
-    split_dataset()       -> (train, dev, test) DataFrames
-                             test  = HELD_OUT_SPEAKERS (by speaker, from config)
-                             train/dev = remaining speakers, 85/15 stratified by L1
-    load_probe_utterances() -> list[dict]  (local files, for probing)
-                               returns test-speaker utterances with wav + textgrid paths
+Corpus layout
+-------------
+Scripted (main corpus):
+    <LOCAL_L2ARCTIC_DIR>/
+        <SPEAKER>/
+            wav/          <SPEAKER>_arctic_<id>.wav
+            annotation/   <SPEAKER>_arctic_<id>.TextGrid
+            transcript/   <SPEAKER>_arctic_<id>.txt
+
+Spontaneous (suitcase corpus — OOD eval only, no train/dev/test split):
+    <LOCAL_L2ARCTIC_DIR>/
+        suitcase_corpus/
+            wav/          <SPEAKER>_<id>.wav
+            annotation/   <SPEAKER>_<id>.TextGrid
+            transcript/   <SPEAKER>_<id>.txt   (may be absent)
+
+All utterance dicts have keys:
+    utterance_id  str   e.g. "ABA_arctic_a0001"
+    speaker       str   e.g. "ABA"
+    l1            str   e.g. "Arabic"
+    wav_path      str   absolute path to .wav
+    textgrid      str   absolute path to .TextGrid
+    text          str   transcript (empty string if missing)
+    split         str   "train" | "dev" | "test" | "ood"
+    domain        str   "scripted" | "spontaneous"
 """
 
 from __future__ import annotations
 
-import io
-import wave
-from pathlib import Path
-from typing import Optional
-
-import pandas as pd
-import soundfile as sf
 from tqdm import tqdm
-from datasets import load_dataset, Audio
+from collections import defaultdict
+from pathlib import Path
+from typing import Dict, List, Set
+
 from sklearn.model_selection import train_test_split
 
-from src.config import DATASET_NAME, HELD_OUT_SPEAKERS, LOCAL_L2ARCTIC_DIR, SPEAKERS
+from src.config import (
+    LOCAL_L2ARCTIC_DIR,
+    SPEAKER_L1,
+    TEST_SPEAKERS,
+    TRAIN_SPEAKERS,
+    RANDOM_SEED,
+    SUITCASE_SUBDIR,
+)
+
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _wav_duration_from_bytes(b: bytes) -> float:
-    with wave.open(io.BytesIO(b), "rb") as f:
-        return f.getnframes() / float(f.getframerate())
+def _read_transcript(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except FileNotFoundError:
+        return ""
 
 
-def _add_duration(batch):
-    batch["duration_s"] = [
-        _wav_duration_from_bytes(a["bytes"]) if a.get("bytes") else None
-        for a in batch["audio"]
-    ]
-    return batch
+def _iter_dir(
+    wav_dir: Path,
+    tg_dir:  Path,
+    txt_dir: Path,
+    speaker: str,
+    split:   str,
+    domain:  str,
+) -> List[Dict]:
+    """Yield utterance dicts from a wav/ + annotation/ + transcript/ triplet."""
+    if not wav_dir.exists():
+        return []
+    utts = []
+    for wav_path in sorted(wav_dir.glob("*.wav")):
+        stem    = wav_path.stem
+        tg_path = tg_dir / f"{stem}.TextGrid"
+        if not tg_path.exists():
+            continue
+        utts.append({
+            "utterance_id": stem,
+            "speaker":      speaker,
+            "l1":           SPEAKER_L1.get(speaker, "Unknown"),
+            "wav_path":     str(wav_path),
+            "textgrid":     str(tg_path),
+            "text":         _read_transcript(txt_dir / f"{stem}.txt"),
+            "split":        split,
+            "domain":       domain,
+        })
+    return utts
 
 
-def _add_text_stats(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["text_num_chars"] = df["text"].str.len()
-    df["text_num_words"] = df["text"].str.split().str.len()
-    df["ipa_num_chars"]  = df["ipa"].str.len()
-    return df
+def _iter_speaker_scripted(spk_dir: Path, split: str) -> List[Dict]:
+    return _iter_dir(
+        wav_dir = spk_dir / "wav",
+        tg_dir  = spk_dir / "textgrid",
+        txt_dir = spk_dir / "transcript",
+        speaker = spk_dir.name,
+        split   = split,
+        domain  = "scripted",
+    )
 
 
-def _load_split(split_name: str, cache_dir: Optional[str] = None) -> pd.DataFrame:
-    dataset = load_dataset(DATASET_NAME, cache_dir=cache_dir)
-    dataset = dataset.cast_column("audio", Audio(decode=False))
-    dataset = dataset.map(_add_duration, batched=True)
-
-    df = dataset[split_name].to_pandas()
-    df["ipa_wstress"] = df["ipa"]
-    df["ipa"] = df["ipa"].str.replace("[ˈˌ]", "", regex=True)
-    df = _add_text_stats(df)
-    return df
+def _load_raw_scripted(
+    local_root: Path,
+    speakers:   Set[str],
+    split:      str,
+) -> List[Dict]:
+    utts = []
+    for spk in tqdm(sorted(speakers), desc=f"Loading scripted utterances from {len(speakers)} speakers"):
+        spk_dir = local_root / spk
+        if not spk_dir.is_dir():
+            print(f"  [WARN] Speaker dir not found: {spk_dir}")
+            continue
+        utts.extend(_iter_speaker_scripted(spk_dir, split))
+    return utts
 
 
 # ---------------------------------------------------------------------------
-# Public API — HF loading
+# Public loaders — scripted
 # ---------------------------------------------------------------------------
 
-def load_scripted(cache_dir: Optional[str] = None) -> pd.DataFrame:
-    """Load the scripted split (HF). Use for fine-tuning and WER evaluation."""
-    return _load_split("scripted", cache_dir=cache_dir)
+def load_test_utterances(
+    local_root: str | Path = LOCAL_L2ARCTIC_DIR,
+) -> List[Dict]:
+    """Held-out test speakers (6 speakers, one per L1). Never seen during training."""
+    utts = _load_raw_scripted(Path(local_root), TEST_SPEAKERS, "test")
+    print(f"[load_test_utterances]  {len(utts)} utterances "
+          f"from {len(TEST_SPEAKERS)} held-out speakers")
+    return utts
 
 
-def load_spontaneous(cache_dir: Optional[str] = None) -> pd.DataFrame:
-    """Load the spontaneous split (HF)."""
-    return _load_split("spontaneous", cache_dir=cache_dir)
-
-
-def split_dataset(
-    df: pd.DataFrame,
-    dev_size: float = 0.15,
-    random_state: int = 42,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_train_dev_utterances(
+    local_root:   str | Path = LOCAL_L2ARCTIC_DIR,
+    dev_fraction: float      = 0.15,
+    random_seed:  int        = RANDOM_SEED,
+) -> tuple[List[Dict], List[Dict]]:
     """
-    Split a loaded DataFrame into (train, dev, test).
+    Utterances from the 18 non-held-out speakers split into train / dev
+    at the utterance level, stratified by L1.
 
-    test  : rows whose speaker_code is in HELD_OUT_SPEAKERS (config.py)
-            — one speaker per L1, never seen during training
-    train : 85% of remaining rows, stratified by speaker_native_language
-    dev   : 15% of remaining rows, stratified by speaker_native_language
+    Returns (train_utts, dev_utts).
+    """
+    utts = _load_raw_scripted(Path(local_root), TRAIN_SPEAKERS, split="train")
+
+    train, dev = train_test_split(
+        utts,
+        test_size    = dev_fraction,
+        random_state = random_seed,
+        stratify     = [u["l1"] for u in utts],
+    )
+    for u in dev:
+        u["split"] = "dev"
+
+    print(f"[load_train_dev_utterances]  train={len(train)}  dev={len(dev)}  "
+          f"(18 speakers, stratified by L1)")
+    return list(train), list(dev)
+
+
+def load_all_scripted(
+    local_root:   str | Path = LOCAL_L2ARCTIC_DIR,
+    dev_fraction: float      = 0.15,
+    random_seed:  int        = RANDOM_SEED,
+) -> List[Dict]:
+    """All 24 speakers (scripted) with split labels. Used by probe scripts."""
+    train, dev = load_train_dev_utterances(local_root, dev_fraction, random_seed)
+    test        = load_test_utterances(local_root)
+    return train + dev + test
+
+
+# ---------------------------------------------------------------------------
+# Public loader — spontaneous / suitcase corpus (OOD eval only)
+# ---------------------------------------------------------------------------
+
+def load_suitcase_corpus(
+    local_root: str | Path = LOCAL_L2ARCTIC_DIR,
+    speakers:   Set[str]   = frozenset({"all"}),
+) -> List[Dict]:
+    """
+    Load the suitcase corpus (spontaneous speech) as an OOD evaluation set.
+
+    All utterances are labelled split="ood", domain="spontaneous".
+    Speaker identity is inferred from the filename prefix (e.g. "ABA_...").
+    This data is NEVER used for training.
 
     Parameters
     ----------
-    df          : output of load_scripted() or load_spontaneous()
-    dev_size    : fraction of non-test rows to use as dev (default 0.15)
-    random_state: for reproducibility
-
-    Returns
-    -------
-    train, dev, test — three DataFrames, reset index
+    local_root : root of local L2-ARCTIC corpus
+    speakers   : {"all"} → all speakers found; or an explicit set of IDs to keep
     """
-    test = df[df["speaker_code"].isin(HELD_OUT_SPEAKERS)].copy().reset_index(drop=True)
-    pool = df[~df["speaker_code"].isin(HELD_OUT_SPEAKERS)].copy()
+    from src.config import SPEAKERS as ALL_SPEAKERS
 
-    if len(pool) == 0:
-        raise ValueError("All rows are in HELD_OUT_SPEAKERS — nothing left for train/dev.")
+    target      = set(ALL_SPEAKERS) if "all" in speakers else set(speakers)
+    sc_dir      = Path(local_root) / SUITCASE_SUBDIR
+    wav_dir     = sc_dir / "wav"
+    tg_dir      = sc_dir / "annotation"
+    txt_dir     = sc_dir / "transcript"
 
-    # Check we have enough samples per L1 to stratify
-    l1_counts = pool["speaker_native_language"].value_counts()
-    can_stratify = l1_counts.min() >= 2
-    stratify_col = pool["speaker_native_language"] if can_stratify else None
-    if not can_stratify:
-        print("[WARN] Some L1 groups too small to stratify — splitting without stratification")
+    if not sc_dir.exists():
+        raise FileNotFoundError(
+            f"Suitcase corpus not found at {sc_dir}. "
+            "Check LOCAL_L2ARCTIC_DIR in config.py."
+        )
 
-    train, dev = train_test_split(
-        pool,
-        test_size=dev_size,
-        stratify=stratify_col,
-        random_state=random_state,
-    )
+    utts = []
+    for wav_path in sorted(wav_dir.glob("*.wav")):
+        stem = wav_path.stem
+        # Infer speaker from filename prefix (e.g. "ABA_sc001" → "ABA")
+        speaker = stem.upper()
+        if speaker is None or speaker not in target:
+            continue
+        tg_path = tg_dir / f"{stem}.TextGrid"
+        if not tg_path.exists():
+            continue
+        utts.append({
+            "utterance_id": stem,
+            "speaker":      speaker,
+            "l1":           SPEAKER_L1.get(speaker, "Unknown"),
+            "wav_path":     str(wav_path),
+            "textgrid":     str(tg_path),
+            "text":         _read_transcript(txt_dir / f"{stem}.txt"),
+            "split":        "ood",
+            "domain":       "spontaneous",
+        })
 
-    print(f"Split summary:")
-    print(f"  Train : {len(train):>5} rows  ({len(train)/len(df)*100:.1f}%)")
-    print(f"  Dev   : {len(dev):>5} rows  ({len(dev)/len(df)*100:.1f}%)")
-    print(f"  Test  : {len(test):>5} rows  ({len(test)/len(df)*100:.1f}%)  [{sorted(HELD_OUT_SPEAKERS)}]")
-
-    return train.reset_index(drop=True), dev.reset_index(drop=True), test
+    n_spk = len({u["speaker"] for u in utts})
+    print(f"[load_suitcase_corpus]  {len(utts)} utterances from {n_spk} speakers")
+    return utts
 
 
 # ---------------------------------------------------------------------------
-# Public API — local files for probing
+# Probe loader — scripted only; use load_suitcase_corpus() separately for OOD
 # ---------------------------------------------------------------------------
 
 def load_probe_utterances(
-    local_root: Path = LOCAL_L2ARCTIC_DIR,
-    split: str = "scripted",
-    speakers: Optional[set[str]] = None,
-    max_utts: Optional[int] = None,
-    max_utts_per_speaker: Optional[int] = None,
-) -> list[dict]:
+    local_root:           str | Path = LOCAL_L2ARCTIC_DIR,
+    max_utts_per_speaker: int        = 50,
+    speakers:             Set[str]   = frozenset({"all"}),
+) -> List[Dict]:
     """
-    Walk the local L2-ARCTIC directory and return a list of utterance dicts
-    ready for probe_utils.build_embedding_dataset().
-
-    Each dict contains:
-        audio        : np.ndarray  (float32, 16 kHz mono)
-        textgrid     : str         path to .TextGrid file
-        speaker      : str         speaker code
-        utterance_id : str         e.g. "arctic_a0001"
+    Load scripted utterances for probing and clustering.
+    For OOD / spontaneous probing, call load_suitcase_corpus() directly.
 
     Parameters
     ----------
-    local_root : path to root of local L2-ARCTIC corpus
-                 (expects speaker_dir/wav/*.wav and speaker_dir/textgrid/*.TextGrid)
-    split      : "scripted" | "spontaneous" | "all"
-    speakers   : if given, only load these speaker codes
-                 defaults to HELD_OUT_SPEAKERS (test set) so probing is
-                 always on held-out data unless you explicitly override
-    max_utts   : cap total utterances loaded (useful for quick debugging)
-    max_utts_per_speaker : cap utterances per speaker 
-    you should set either max_utts or max_utts_per_speaker, not both
+    local_root           : root of local L2-ARCTIC corpus
+    max_utts_per_speaker : deterministic stride-based subsample per speaker
+    speakers             : {"all"} → all 24 speakers; or an explicit set of IDs
     """
-    if speakers is None:
-        speakers = HELD_OUT_SPEAKERS
-        print(f"[INFO] load_probe_utterances: defaulting to held-out test speakers: {sorted(speakers)}")
+    from src.config import SPEAKERS as ALL_SPEAKERS
 
-    if speakers == {"all"}:
-        speakers = SPEAKERS
+    target   = set(ALL_SPEAKERS) if "all" in speakers else set(speakers)
+    all_utts = load_all_scripted(local_root)
+    utts     = [u for u in all_utts if u["speaker"] in target]
 
-    root       = Path(local_root)
-    utterances = []
+    if max_utts_per_speaker:
+        by_spk: Dict[str, List[Dict]] = defaultdict(list)
+        for u in utts:
+            by_spk[u["speaker"]].append(u)
+        utts = []
+        for spk, spk_utts in sorted(by_spk.items()):
+            if len(spk_utts) > max_utts_per_speaker:
+                step     = max(1, len(spk_utts) // max_utts_per_speaker)
+                spk_utts = spk_utts[::step][:max_utts_per_speaker]
+            utts.extend(spk_utts)
 
-    for spk_dir in sorted(root.iterdir()):
-        if not spk_dir.is_dir():
-            continue
-        spk = spk_dir.name
-        if spk not in speakers:
-            continue
+    print(f"[load_probe_utterances]  {len(utts)} utterances "
+          f"from {len(target)} speakers")
+    return utts
 
-        wav_dir = spk_dir / "wav"
-        tg_dir  = spk_dir / "textgrid"
-        if not wav_dir.exists() or not tg_dir.exists():
-            print(f"  [WARN] Missing wav/ or textgrid/ for speaker {spk}, skipping")
-            continue
-
-        wav_files = sorted(wav_dir.glob("*.wav"))
-        if max_utts_per_speaker:
-            wav_files = wav_files[:max_utts_per_speaker]
-        for wav_path in tqdm(wav_files, desc=spk, leave=False):
-            uid = wav_path.stem
-
-            if split == "scripted"    and not uid.startswith("arctic_"): continue
-            if split == "spontaneous" and     uid.startswith("arctic_"): continue
-
-            tg_path = tg_dir / (uid + ".TextGrid")
-            if not tg_path.exists():
-                continue
-
-            text_path = spk_dir / "transcript" / f"{uid}.txt"
-            text = text_path.read_text().strip() if text_path.exists() else None
-
-            utterances.append({
-                "wav_path":     str(wav_path),
-                "text":         text,
-                "textgrid":     str(tg_path),
-                "speaker":      spk,
-                "utterance_id": uid,
-            })
-
-            if max_utts and len(utterances) >= max_utts:
-                print(f"[INFO] Reached max_utts={max_utts}, stopping early")
-                return utterances
-
-    print(f"[INFO] Loaded {len(utterances)} utterances from {len(speakers)} speakers (local)")
-    return utterances
-
-
-# ---------------------------------------------------------------------------
-# For testing
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("=== HF dataset ===")
-    scripted_df = load_scripted()
-    print("Scripted shape:  ", scripted_df.shape)
-    print("Scripted columns:", scripted_df.columns.tolist())
-    print(scripted_df[["speaker_code", "speaker_native_language", "text"]].head())
+    # Load utterances
+    # print columns and first few rows for sanity check
+    train, test = load_train_dev_utterances()
+    import pandas as pd
+    df = pd.DataFrame(train)
+    print("Columns:", df.columns.tolist())
+    print(df[["speaker", "l1", "text"]].head())
 
-    train_df, dev_df, test_df = split_dataset(scripted_df)
-    print("\nL1 balance — test:")
-    print(test_df["speaker_native_language"].value_counts())
-    print("\nL1 balance — train:")
-    print(train_df["speaker_native_language"].value_counts())
-
-    print("\n=== Local probe utterances (test speakers) ===")
-    probe_utts = load_probe_utterances(
-        local_root=LOCAL_L2ARCTIC_DIR,
-        split="scripted",
-        max_utts=20,
-    )
-    if probe_utts:
-        u = probe_utts[0]
-        print(f"  Sample: speaker={u['speaker']}  text={u['text']} uid={u['utterance_id']}  "
-              f"wav_path={u['wav_path']}  tg={u['textgrid']}")
+    # Load suitcase corpus (OOD)
+    sc_utts = load_suitcase_corpus()
+    sc_df = pd.DataFrame(sc_utts)
+    print("\nSuitcase corpus (OOD) columns:", sc_df.columns.tolist())
+    print(sc_df[["speaker", "l1", "text"]].head())
+    

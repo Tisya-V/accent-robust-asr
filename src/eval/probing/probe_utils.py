@@ -1,178 +1,47 @@
 """
-probe_utils.py
+src/utils/probe_utils.py
 Shared utilities for the L2-ARCTIC Whisper probing suite.
 
-Responsibilities:
+Responsibilities
+----------------
 - Whisper encoder hidden-state extraction (all layers)
 - TextGrid phoneme segment parsing
 - Segment mean-pooling of encoder frames
-- ARPAbet vocab and phonological feature mapping
-- Shared data loading helpers
+- Shared dataset-building helpers
+
+Phoneme vocab and phonological features live in src/utils/phonology.py.
 """
 
-import os
+from __future__ import annotations
+
 import json
-import numpy as np
-import torch
+from dataclasses import dataclass
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Optional
+from typing import Dict, List, Optional, Tuple
+
 import librosa
+import numpy as np
 import soundfile as sf
+import torch
 from tqdm import tqdm
+
 from src.config import (
-    SPEAKER_L1, L1_2_ID, SILENCE_LABELS, 
-    ENCODER_FRAME_RATE, WHISPER_HIDDEN_DIM, WHISPER_N_ENCODER_LAYERS
+    ENCODER_FRAME_RATE,
+    L1_2_ID,
+    SILENCE_LABELS,
+    SPEAKER_L1,
+    WHISPER_N_ENCODER_LAYERS,
 )
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-
-
-# 39 standard ARPAbet phones (excluding silence markers)
-ARPABET_VOCAB = [
-    "AA", "AE", "AH", "AO", "AW", "AY",
-    "B",  "CH", "D",  "DH", "EH", "ER",
-    "EY", "F",  "G",  "HH", "IH", "IY",
-    "JH", "K",  "L",  "M",  "N",  "NG",
-    "OW", "OY", "P",  "R",  "S",  "SH",
-    "T",  "TH", "UH", "UW", "V",  "W",
-    "Y",  "Z",  "ZH",
-]
-PHONE2ID = {p: i for i, p in enumerate(ARPABET_VOCAB)}
-NUM_PHONES = len(ARPABET_VOCAB)
-
-
-# Phonological feature matrix: (NUM_PHONES, NUM_FEATURES)
-# Features: [voiced, nasal, fricative, affricate, stop, approximant,
-#             lateral, labial, coronal, dorsal, vowel, front, back, high, low, round]
-_PHON_FEATURES = {
-    # Vowels
-    "AA": [1,0,0,0,0,0,0,0,0,1,1,0,1,0,1,0],
-    "AE": [1,0,0,0,0,0,0,0,0,1,1,1,0,0,1,0],
-    "AH": [1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0],
-    "AO": [1,0,0,0,0,0,0,0,0,1,1,0,1,0,1,1],
-    "AW": [1,0,0,0,0,0,0,0,0,1,1,0,0,0,1,0],
-    "AY": [1,0,0,0,0,0,0,0,0,1,1,1,0,0,1,0],
-    "EH": [1,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0],
-    "ER": [1,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0],
-    "EY": [1,0,0,0,0,0,0,0,0,1,1,1,0,1,0,0],
-    "IH": [1,0,0,0,0,0,0,0,0,1,1,1,0,1,0,0],
-    "IY": [1,0,0,0,0,0,0,0,0,1,1,1,0,1,0,0],
-    "OW": [1,0,0,0,0,0,0,0,0,1,1,0,1,1,0,1],
-    "OY": [1,0,0,0,0,0,0,0,0,1,1,0,1,0,1,1],
-    "UH": [1,0,0,0,0,0,0,0,0,1,1,0,1,1,0,1],
-    "UW": [1,0,0,0,0,0,0,0,0,1,1,0,1,1,0,1],
-    # Stops
-    "B":  [1,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0],
-    "D":  [1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0],
-    "G":  [1,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0],
-    "K":  [0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0],
-    "P":  [0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0],
-    "T":  [0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0],
-    # Fricatives
-    "DH": [1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    "F":  [0,0,1,0,0,0,0,1,0,0,0,0,0,0,0,0],
-    "HH": [0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0],
-    "S":  [0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    "SH": [0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    "TH": [0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    "V":  [1,0,1,0,0,0,0,1,0,0,0,0,0,0,0,0],
-    "Z":  [1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    "ZH": [1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    # Affricates
-    "CH": [0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,0],
-    "JH": [1,0,0,1,0,0,0,0,1,0,0,0,0,0,0,0],
-    # Nasals
-    "M":  [1,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
-    "N":  [1,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-    "NG": [1,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
-    # Approximants / liquids
-    "L":  [1,0,0,0,0,1,1,0,1,0,0,0,0,0,0,0],
-    "R":  [1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0],
-    "W":  [1,0,0,0,0,1,0,1,0,1,0,0,0,1,0,1],
-    "Y":  [1,0,0,0,0,1,0,0,0,1,0,1,0,1,0,0],
-}
-PHON_FEATURE_NAMES = [
-    "voiced","nasal","fricative","affricate","stop","approximant",
-    "lateral","labial","coronal","dorsal","vowel","front","back","high","low","round"
-]
-NUM_PHON_FEATURES = len(PHON_FEATURE_NAMES)
-
-PHON_FEATURE_MATRIX = np.zeros((NUM_PHONES, NUM_PHON_FEATURES), dtype=np.float32)
-for phone, feats in _PHON_FEATURES.items():
-    if phone in PHONE2ID:
-        PHON_FEATURE_MATRIX[PHONE2ID[phone]] = feats
-
-
-# ---------------------------------------------------------------------------
-# TextGrid parsing
-# ---------------------------------------------------------------------------
-
-@dataclass
-class PhoneSegment:
-    label: str          # ARPAbet label
-    start: float        # seconds
-    end:   float        # seconds
-    phone_id: int = -1  # index into ARPABET_VOCAB (-1 if silence/unknown)
-
-    @property
-    def start_frame(self) -> int:
-        return int(self.start * ENCODER_FRAME_RATE)
-
-    @property
-    def end_frame(self) -> int:
-        return max(self.start_frame + 1, int(self.end * ENCODER_FRAME_RATE))
-
-    @property
-    def duration(self) -> float:
-        return self.end - self.start
-
-
-def parse_textgrid(textgrid_path: str, tier_name: str = "phones") -> List[PhoneSegment]:
-    """
-    Parse a Praat TextGrid file and return a list of PhoneSegments.
-    Skips silence tokens.  Handles both short-format and long-format TextGrids.
-    """
-    segments = []
-    path = Path(textgrid_path)
-    if not path.exists():
-        raise FileNotFoundError(f"TextGrid not found: {textgrid_path}")
-
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lines = [l.strip() for l in text.splitlines()]
-
-    # Find the target tier
-    in_target_tier = False
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        # Detect tier header
-        if 'name = "' in line or "name = " in line:
-            tier_label = line.split("=", 1)[1].strip().strip('"')
-            in_target_tier = (tier_label == tier_name)
-        if in_target_tier and ("intervals [" in line or "intervals:" in line):
-            # Try to parse a block: xmin, xmax, text
-            try:
-                xmin = float(lines[i+1].split("=")[1].strip())
-                xmax = float(lines[i+2].split("=")[1].strip())
-                text_val = lines[i+3].split("=", 1)[1].strip().strip('"')
-                # Normalise ARPAbet label: strip stress digits
-                label = text_val.rstrip("012").upper()
-                if label not in SILENCE_LABELS:
-                    pid = PHONE2ID.get(label, -1)
-                    segments.append(PhoneSegment(
-                        label=label, start=xmin, end=xmax, phone_id=pid
-                    ))
-                i += 4
-                continue
-            except (IndexError, ValueError):
-                pass
-        i += 1
-
-    return segments
+from src.utils.phonology import (
+    ARPABET_VOCAB,
+    NUM_PHONES,
+    NUM_PHON_FEATURES,
+    PHON_FEATURE_MATRIX,
+    PHON_FEATURE_NAMES,
+    PHONE2ID,
+    phone_to_features,
+)
+from src.utils.textgrid import parse_textgrid
 
 
 # ---------------------------------------------------------------------------
@@ -182,25 +51,26 @@ def parse_textgrid(textgrid_path: str, tier_name: str = "phones") -> List[PhoneS
 def extract_encoder_hidden_states(
     model,
     processor,
-    audio_array: np.ndarray,
-    sampling_rate: int = 16000,
+    wav_path: str,
     device: str = "cpu",
 ) -> Tuple[torch.Tensor, ...]:
     """
-    Run Whisper encoder on a single audio array.
-    Returns a tuple of tensors of shape (1, T, 512):
-        index 0  → embedding output (after positional encoding)
-        index 1  → layer 1 output
-        ...
-        index 6  → layer 6 output   (top encoder layer for whisper-small)
+    Run the Whisper encoder on a single audio file.
 
-    So hidden_states[layer_idx + 1] gives the output of encoder layer `layer_idx`.
+    Returns a tuple of (WHISPER_N_ENCODER_LAYERS + 1) tensors, each (1, T, D):
+        index 0      → embedding output (after conv + positional encoding)
+        index 1..12  → transformer encoder layer outputs 1–12
+
+    i.e. hidden_states[layer_idx] gives the output *after* layer (layer_idx - 1),
+    and hidden_states[0] is the pre-transformer embedding.
     """
-    inputs = processor(
-        audio_array,
-        sampling_rate=sampling_rate,
-        return_tensors="pt",
-    )
+    audio, sr = sf.read(wav_path, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sr != 16000:
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+
+    inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features.to(device)
 
     model.eval()
@@ -210,117 +80,112 @@ def extract_encoder_hidden_states(
             output_hidden_states=True,
             return_dict=True,
         )
-    # tuple: (embed_output, layer_0_out, ..., layer_5_out) for whisper-small
-    return encoder_outputs.hidden_states   # length = N_layers + 1
+    # length = WHISPER_N_ENCODER_LAYERS + 1  (13 for whisper-small)
+    return encoder_outputs.hidden_states
 
 
 def pool_segment(
     hidden_states: torch.Tensor,  # (1, T, D)
     start_frame: int,
     end_frame: int,
-) -> np.ndarray:
-    """Mean-pool encoder frames over [start_frame, end_frame) → (D,) numpy array."""
+) -> Optional[np.ndarray]:
+    """Mean-pool encoder frames over [start_frame, end_frame) → (D,) float32."""
     end_frame = min(end_frame, hidden_states.shape[1])
     if end_frame <= start_frame:
         return None
-    seg = hidden_states[0, start_frame:end_frame, :].mean(dim=0)
-    return seg.cpu().float().numpy()
+    return hidden_states[0, start_frame:end_frame].mean(dim=0).cpu().float().numpy()
 
 
 # ---------------------------------------------------------------------------
-# Building the embedding dataset
+# Embedding dataset construction
 # ---------------------------------------------------------------------------
 
 @dataclass
 class EmbeddingRecord:
-    """One segment's embedding at a given layer, with all metadata."""
-    embedding:  np.ndarray        # (D,)
-    phone_id:   int
-    phone_label: str
-    speaker_id: str
-    l1_id:      int
-    l1_label:   str
-    layer_idx:  int
+    """One phone segment's embedding at a given encoder layer, with metadata."""
+    embedding:    np.ndarray  # (D,)
+    phone_id:     int
+    phone_label:  str
+    speaker_id:   str
+    l1_id:        int
+    l1_label:     str
+    layer_idx:    int         # 0 = embed, 1-12 = transformer layers
     utterance_id: str
+    split:        str         # "train" | "dev" | "test" | "ood"
 
 
 def build_embedding_dataset(
     model,
     processor,
-    utterances: List[Dict],        # list of {audio, textgrid, speaker, utterance_id}
+    utterances: List[Dict],
     layer_indices: Optional[List[int]] = None,
     device: str = "cpu",
-    min_duration_ms: float = 30.0,  # skip segments shorter than this
+    min_duration_ms: float = 30.0,
 ) -> List[EmbeddingRecord]:
     """
     Extract segment-level embeddings for all utterances at specified encoder layers.
 
-    Args:
-        utterances: list of dicts with keys:
-            - 'audio':        np.ndarray, 16kHz mono
-            - 'textgrid':     path to TextGrid file
-            - 'speaker':      speaker ID string (e.g. 'ABA')
-            - 'utterance_id': unique string
-        layer_indices: which encoder layers to extract (0 = embedding, 1-6 = transformer layers).
-                       Default: all 7 (0..6).
-        min_duration_ms: skip phone segments shorter than this.
+    Parameters
+    ----------
+    model, processor : loaded Whisper model + processor
+    utterances       : list of dicts from load_l2arctic (must have wav_path,
+                       textgrid, speaker, utterance_id, split)
+    layer_indices    : encoder layers to extract; default = all 13 (0..12)
+    device           : "cpu" or "cuda"
+    min_duration_ms  : skip segments shorter than this (ms)
 
-    Returns:
-        List of EmbeddingRecord objects (one per segment per layer).
+    Returns
+    -------
+    List of EmbeddingRecord (one per valid segment per requested layer).
     """
     if layer_indices is None:
-        layer_indices = list(range(WHISPER_N_ENCODER_LAYERS + 1))  # 0..6
+        layer_indices = list(range(WHISPER_N_ENCODER_LAYERS + 1))  # 0..12
 
-    records = []
-    for utt in tqdm(utterances, desc="Extracting"):
+    records: List[EmbeddingRecord] = []
 
-        audio, sr = sf.read(utt["wav_path"], dtype="float32")
-        if audio.ndim > 1: audio = audio.mean(axis=1)
-        if sr != 16000: audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
-
+    for utt in tqdm(utterances, desc="Extracting embeddings"):
         speaker = utt["speaker"]
-        l1 = SPEAKER_L1.get(speaker, "Unknown")
-        l1_id = L1_2_ID.get(l1, -1)
+        l1      = SPEAKER_L1.get(speaker, "Unknown")
+        l1_id   = L1_2_ID.get(l1, -1)
+        split   = utt.get("split", "unknown")
 
-        # Parse phone segments from TextGrid
         try:
             segments = parse_textgrid(utt["textgrid"])
         except Exception as e:
-            print(f"  [WARN] Could not parse TextGrid {utt['textgrid']}: {e}")
+            print(f"  [WARN] TextGrid parse failed {utt['textgrid']}: {e}")
             continue
 
-        # Only keep segments with known ARPAbet labels
-        valid_segs = [s for s in segments
-                      if s.phone_id >= 0
-                      and s.duration * 1000 >= min_duration_ms]
+        valid_segs = [
+            s for s in segments
+            if s.phone_id >= 0 and s.duration * 1000 >= min_duration_ms
+        ]
         if not valid_segs:
             continue
 
-        # Extract hidden states for this utterance
         try:
-            hidden_states_tuple = extract_encoder_hidden_states(
-                model, processor, audio, device=device
+            hs_tuple = extract_encoder_hidden_states(
+                model, processor, utt["wav_path"], device=device
             )
         except Exception as e:
-            print(f"  [WARN] Encoder failed for {utt['utterance_id']}: {e}")
+            print(f"  [WARN] Encoder failed {utt['utterance_id']}: {e}")
             continue
 
-        # Pool each segment at each requested layer
         for layer_idx in layer_indices:
-            hs = hidden_states_tuple[layer_idx]   # (1, T, D)
+            hs = hs_tuple[layer_idx]           # (1, T, D)
             for seg in valid_segs:
                 emb = pool_segment(hs, seg.start_frame, seg.end_frame)
                 if emb is None:
                     continue
                 records.append(EmbeddingRecord(
-                    embedding=emb,
-                    phone_id=seg.phone_id,
-                    phone_label=seg.label,
-                    speaker_id=speaker,
-                    l1_id=l1_id,
-                    l1_label=l1,
-                    layer_idx=layer_idx,
-                    utterance_id=utt["utterance_id"],
+                    embedding    = emb,
+                    phone_id     = seg.phone_id,
+                    phone_label  = seg.label,
+                    speaker_id   = speaker,
+                    l1_id        = l1_id,
+                    l1_label     = l1,
+                    layer_idx    = layer_idx,
+                    utterance_id = utt["utterance_id"],
+                    split        = split,
                 ))
 
     return records
@@ -329,32 +194,41 @@ def build_embedding_dataset(
 def records_to_arrays(
     records: List[EmbeddingRecord],
     layer_idx: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Filter records to one layer and return aligned numpy arrays.
-    Returns: X (N, D), phone_ids (N,), l1_ids (N,), speaker_strs (N,)
+
+    Returns
+    -------
+    X           (N, D)  embeddings
+    phone_ids   (N,)    int
+    l1_ids      (N,)    int
+    speakers    (N,)    str
+    splits      (N,)    str
     """
-    subset = [r for r in records if r.layer_idx == layer_idx]
-    X          = np.stack([r.embedding    for r in subset])
-    phone_ids  = np.array([r.phone_id     for r in subset])
-    l1_ids     = np.array([r.l1_id        for r in subset])
-    speakers   = np.array([r.speaker_id   for r in subset])
-    return X, phone_ids, l1_ids, speakers
+    subset   = [r for r in records if r.layer_idx == layer_idx]
+    X        = np.stack([r.embedding   for r in subset])
+    phone_ids = np.array([r.phone_id    for r in subset])
+    l1_ids   = np.array([r.l1_id       for r in subset])
+    speakers = np.array([r.speaker_id  for r in subset])
+    splits   = np.array([r.split       for r in subset])
+    return X, phone_ids, l1_ids, speakers, splits
 
 
 # ---------------------------------------------------------------------------
 # Results serialisation
 # ---------------------------------------------------------------------------
 
-def save_results(results: dict, path: str):
-    """Save a results dict to JSON, converting numpy types."""
-    def convert(obj):
-        if isinstance(obj, (np.integer,)): return int(obj)
-        if isinstance(obj, (np.floating,)): return float(obj)
-        if isinstance(obj, np.ndarray):     return obj.tolist()
-        raise TypeError(f"Unserializable: {type(obj)}")
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(results, f, indent=2, default=convert)
-    print(f"  Saved results → {path}")
+def save_results(results: dict, path: str) -> None:
+    """Save a results dict to JSON, converting numpy scalars/arrays."""
+    def _convert(obj):
+        if isinstance(obj, np.integer): return int(obj)
+        if isinstance(obj, np.floating): return float(obj)
+        if isinstance(obj, np.ndarray):  return obj.tolist()
+        raise TypeError(f"Unserializable type: {type(obj)}")
 
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
+        json.dump(results, f, indent=2, default=_convert)
+    print(f"  Saved → {path}")

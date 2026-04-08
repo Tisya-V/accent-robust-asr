@@ -1,5 +1,0 @@
-{
-  "run": "ctc_only",
-  "args": {
-    "run_name": "ctc_only",
-    "data_root": 

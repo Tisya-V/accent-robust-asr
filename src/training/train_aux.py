@@ -1,20 +1,15 @@
-
 """
 train_aux.py
-Training loop for WhisperWithAuxHeads with CTC phoneme auxiliary loss.
+Training loop for WhisperWithAuxHeads.
 
 Ablation conditions via --lambda_ctc / --lambda_feat:
-    baseline:  0.0, 0.0
-    ctc_only:  0.3, 0.0  
-    feat_only: 0.0, 0.1
-    both:      0.3, 0.1
+    baseline  :  0.0,  0.0
+    ctc_only  :  0.3,  0.0
+    feat_only :  0.0,  0.1
+    both      :  0.3,  0.1
 
 Usage:
-    python -m src.training.train_aux \\
-        --run_name ctc_only \\
-        --lambda_ctc 0.3 \\
-        --output_dir models/aux_ctc \\
-        [--epochs 5] [--batch_size 16] [--lr 1e-4]
+    python train_aux.py --run_name ctc_only --lambda_ctc 0.3 --output_dir models/aux_ctc
 """
 
 from __future__ import annotations
@@ -22,42 +17,25 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any, Dict, List
 
+import librosa
 import numpy as np
-from sklearn.model_selection import train_test_split
+import soundfile as sf
 import torch
+from peft import LoraConfig, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import WhisperProcessor, get_linear_schedule_with_warmup
-from peft import get_peft_model, LoraConfig, TaskType
 
-from src.eval.probing.probe_utils import SPEAKER_L1
-from src.training.whisper_aux import AuxCollator, WhisperWithAuxHeads
-from src.utils.load_l2arctic import load_probe_utterances
-from src.config import LOCAL_L2ARCTIC_DIR, HELD_OUT_SPEAKERS
+from src.config import LOCAL_L2ARCTIC_DIR, MODEL_ID, RANDOM_SEED
+from src.utils.load_l2arctic import load_train_dev_utterances
+from src.utils.textgrid import parse_textgrid
+from src.utils.phonology import PHON_FEATURE_MATRIX, PHONE2ID
+from src.training.whisper_aux import WhisperWithAuxHeads
 
-
-# ---------------------------------------------------------------------------
-# Dataset wrapper
-# ---------------------------------------------------------------------------
-
-class L2ArcticDataset(Dataset):
-    def __init__(self, utterances):
-        self.utterances = utterances
-
-    def __len__(self):
-        return len(self.utterances)
-
-    def __getitem__(self, idx):
-        return self.utterances[idx]
-
-
-# ---------------------------------------------------------------------------
-# LoRA config — keep identical to baseline for fair ablation
-# ---------------------------------------------------------------------------
 
 LORA_CONFIG = LoraConfig(
-    # task_type      = TaskType.SEQ_2_SEQ_LM,
     r              = 8,
     lora_alpha     = 16,
     lora_dropout   = 0.05,
@@ -67,113 +45,181 @@ LORA_CONFIG = LoraConfig(
 
 
 # ---------------------------------------------------------------------------
-# Train
+# Collator
 # ---------------------------------------------------------------------------
 
-def train(args):
+class AuxCollator:
+    """
+    Collates utterance dicts into batches for WhisperWithAuxHeads.
+    Builds CTC phone sequences and (optionally) feature targets from TextGrids.
+    """
+
+    def __init__(
+        self,
+        processor:     WhisperProcessor,
+        lambda_feat:   float = 0.0,
+        max_label_len: int   = 448,
+    ):
+        self.processor     = processor
+        self.lambda_feat   = lambda_feat
+        self.max_label_len = max_label_len
+        self.pad_id        = processor.tokenizer.pad_token_id
+
+    def __call__(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Load audio
+        audios = []
+        for it in items:
+            audio, sr = sf.read(it["wav_path"], dtype="float32", always_2d=False)
+            if sr != 16000:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+            audios.append(audio)
+
+        # Log-mel features
+        input_features = self.processor(
+            audios, sampling_rate=16000, return_tensors="pt", padding="max_length",
+        ).input_features                                         # (B, 80, 3000)
+
+        # Decoder labels
+        labels = self.processor.tokenizer(
+            [it["text"] for it in items],
+            return_tensors="pt", padding=True,
+            truncation=True, max_length=self.max_label_len,
+        ).input_ids.clone()
+        labels[labels == self.pad_id] = -100
+
+        # CTC targets — one phone sequence per utterance
+        T_enc = input_features.shape[-1] // 2               # 1500 frames after conv
+        B     = len(items)
+        ctc_input_lengths = torch.full((B,), T_enc, dtype=torch.long)
+
+        ctc_seqs, ctc_lengths = [], []
+        feat_targets_list, feat_frame_spans = [], []
+
+        for it in items:
+            try:
+                segs = parse_textgrid(it["textgrid"])
+            except Exception:
+                segs = []
+
+            phone_ids, spans, feat_vecs = [], [], []
+            for seg in segs:
+                if seg.phone_id < 0:
+                    continue
+                phone_ids.append(seg.phone_id)
+                spans.append((seg.start_frame, seg.end_frame))
+                if self.lambda_feat > 0:
+                    feat_vecs.append(PHON_FEATURE_MATRIX[seg.phone_id])
+
+            if not phone_ids:
+                phone_ids = [0]
+                spans     = [(0, 1)]
+                if self.lambda_feat > 0:
+                    feat_vecs = [PHON_FEATURE_MATRIX[0]]
+
+            ctc_seqs.append(torch.tensor(phone_ids, dtype=torch.long))
+            ctc_lengths.append(len(phone_ids))
+            feat_frame_spans.append(spans)
+            if self.lambda_feat > 0:
+                feat_targets_list.extend(feat_vecs)
+
+        batch = {
+            "input_features":     input_features,
+            "labels":             labels,
+            "ctc_targets":        torch.cat(ctc_seqs),
+            "ctc_input_lengths":  ctc_input_lengths,
+            "ctc_target_lengths": torch.tensor(ctc_lengths, dtype=torch.long),
+            "feat_frame_spans":   feat_frame_spans,
+        }
+        if self.lambda_feat > 0 and feat_targets_list:
+            batch["feat_targets"] = torch.tensor(
+                np.stack(feat_targets_list), dtype=torch.float32
+            )
+        return batch
+
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
+class L2ArcticDataset(Dataset):
+    def __init__(self, utterances): self.utterances = utterances
+    def __len__(self):              return len(self.utterances)
+    def __getitem__(self, idx):     return self.utterances[idx]
+
+
+# ---------------------------------------------------------------------------
+# Training loop
+# ---------------------------------------------------------------------------
+
+def train(args) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Device: {device}")
-    print(f"Run: {args.run_name}  (lambda_ctc={args.lambda_ctc}, lambda_feat={args.lambda_feat})")
+    print(f"=== train_aux  run={args.run_name}  "
+          f"lambda_ctc={args.lambda_ctc}  lambda_feat={args.lambda_feat}  "
+          f"device={device} ===")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Data -----------------------------------------------------------
-    print("\nLoading utterances ...")
-    all_utts = load_probe_utterances(
-        local_root = args.data_root,
-        split      = "scripted",
-        max_utts   = args.max_utts,
-        speakers   = SPEAKER_L1.keys() - HELD_OUT_SPEAKERS 
-    )
-    # Speaker-stratified split so dev has all L1s represented
-    train_dev_speakers = [u["speaker"] for u in all_utts]
-    train_utts, dev_utts = train_test_split(
-        all_utts,
-        test_size    = 0.15,
-        random_state = 42,
-        stratify     = train_dev_speakers,   # preserve speaker/L1 distribution
-    )
+    # Data
+    print("Loading utterances ...")
+    train_utts, dev_utts = load_train_dev_utterances(local_root=args.data_root)
+    print(f"  train={len(train_utts)}  dev={len(dev_utts)}")
 
-    print(f"  Train: {len(train_utts)}  Dev: {len(dev_utts)}")
-
-    processor = WhisperProcessor.from_pretrained("openai/whisper-small")
-    collator  = AuxCollator(processor)
+    processor = WhisperProcessor.from_pretrained(MODEL_ID)
+    processor.tokenizer.set_prefix_tokens(language="en", task="transcribe")
+    collator  = AuxCollator(processor, lambda_feat=args.lambda_feat)
 
     train_loader = DataLoader(
-        L2ArcticDataset(train_utts),
-        batch_size  = args.batch_size,
-        shuffle     = True,
-        collate_fn  = collator,
-        # num_workers = 2,
-        pin_memory  = (device == "cuda"),
+        L2ArcticDataset(train_utts), batch_size=args.batch_size,
+        shuffle=True,  collate_fn=collator, pin_memory=(device == "cuda"),
     )
     dev_loader = DataLoader(
-        L2ArcticDataset(dev_utts),
-        batch_size  = args.batch_size,
-        shuffle     = False,
-        collate_fn  = collator,
-        # num_workers = 2,
-        pin_memory  = (device == "cuda"),
+        L2ArcticDataset(dev_utts),   batch_size=args.batch_size,
+        shuffle=False, collate_fn=collator, pin_memory=(device == "cuda"),
     )
 
-    # ---- Model ----------------------------------------------------------
-    print("\\nBuilding model ...")
+    # Model + LoRA
+    print("Building model ...")
     model = WhisperWithAuxHeads(
-        model_name  = "openai/whisper-small",
+        model_name  = MODEL_ID,
         lambda_ctc  = args.lambda_ctc,
         lambda_feat = args.lambda_feat,
     )
-
-    print("Applying LoRA ...")
-    # Freeze backbone, apply LoRA
     for p in model.whisper.parameters():
         p.requires_grad = False
     model.whisper = get_peft_model(model.whisper, LORA_CONFIG)
     model.whisper.print_trainable_parameters()
-
-    # Aux head params always trainable
-    for p in model.ctc_head.parameters():
-        p.requires_grad = True
-    for p in model.feat_head.parameters():
-        p.requires_grad = True
-
-    print("Moving model to device ...")
     model = model.to(device)
 
-    # ---- Optimiser ------------------------------------------------------
-    optimizer = AdamW(
+    # Optimiser
+    optimizer    = AdamW(
         model.param_groups(base_lr=args.lr, head_lr=args.lr * 10),
-        weight_decay = 0.01,
+        weight_decay=0.01,
     )
     total_steps  = len(train_loader) * args.epochs
-    warmup_steps = max(1, total_steps // 10)
-    scheduler = get_linear_schedule_with_warmup(
+    scheduler    = get_linear_schedule_with_warmup(
         optimizer,
-        num_warmup_steps   = warmup_steps,
+        num_warmup_steps   = max(1, total_steps // 10),
         num_training_steps = total_steps,
     )
 
-    # ---- W&B (optional) ------------------------------------------------
+    # W&B
     use_wandb = False
     if args.wandb:
         try:
             import wandb
-            wandb.init(project="whisper-aux-heads", name=args.run_name, config=vars(args))
+            wandb.init(project="whisper-l2-aux", name=args.run_name, config=vars(args))
             use_wandb = True
         except ImportError:
-            print("wandb not installed, skipping")
+            print("[WARN] wandb not installed, skipping")
 
-    # ---- Loop -----------------------------------------------------------
     best_dev_loss = float("inf")
-    history = []
+    history       = []
 
-    print("\nStarting training ...")
     for epoch in range(1, args.epochs + 1):
-
         # --- Train ---
         model.train()
-        train_losses = {"total": [], "asr": [], "ctc": [], "feat": []}
+        tr = {"total": [], "asr": [], "ctc": [], "feat": []}
 
         for step, batch in enumerate(train_loader):
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -185,33 +231,31 @@ def train(args):
                 ctc_targets        = batch["ctc_targets"],
                 ctc_input_lengths  = batch["ctc_input_lengths"],
                 ctc_target_lengths = batch["ctc_target_lengths"],
+                feat_targets       = batch.get("feat_targets"),
+                feat_frame_spans   = batch.get("feat_frame_spans"),
             )
 
             out.loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+            optimizer.step(); scheduler.step(); optimizer.zero_grad()
 
-            train_losses["total"].append(out.loss.item())
-            train_losses["asr"].append(out.loss_asr.item()  if out.loss_asr  else 0.0)
-            train_losses["ctc"].append(out.loss_ctc.item()  if out.loss_ctc  else 0.0)
-            train_losses["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
+            tr["total"].append(out.loss.item())
+            tr["asr"].append(out.loss_asr.item()   if out.loss_asr  else 0.0)
+            tr["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
+            tr["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
 
             if step % args.log_every == 0:
-                print(
-                    f"  Ep {epoch} | {step:4d}/{len(train_loader)}"
-                    f" | total={out.loss.item():.4f}"
-                    f" asr={train_losses['asr'][-1]:.4f}"
-                    f" ctc={train_losses['ctc'][-1]:.4f}"
-                )
+                print(f"  Ep {epoch} {step:4d}/{len(train_loader)}"
+                      f" | total={tr['total'][-1]:.4f}"
+                      f" asr={tr['asr'][-1]:.4f}"
+                      f" ctc={tr['ctc'][-1]:.4f}"
+                      f" feat={tr['feat'][-1]:.4f}")
 
-        mean_train = {k: float(np.mean(v)) for k, v in train_losses.items()}
+        mean_tr = {k: float(np.mean(v)) for k, v in tr.items()}
 
         # --- Dev ---
         model.eval()
-        dev_losses = {"total": [], "asr": [], "ctc": [], "feat": []}
-
+        dv = {"total": [], "asr": [], "ctc": [], "feat": []}
         with torch.no_grad():
             for batch in dev_loader:
                 batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -222,53 +266,49 @@ def train(args):
                     ctc_targets        = batch["ctc_targets"],
                     ctc_input_lengths  = batch["ctc_input_lengths"],
                     ctc_target_lengths = batch["ctc_target_lengths"],
+                    feat_targets       = batch.get("feat_targets"),
+                    feat_frame_spans   = batch.get("feat_frame_spans"),
                 )
-                dev_losses["total"].append(out.loss.item())
-                dev_losses["asr"].append(out.loss_asr.item()  if out.loss_asr  else 0.0)
-                dev_losses["ctc"].append(out.loss_ctc.item()  if out.loss_ctc  else 0.0)
-                dev_losses["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
+                dv["total"].append(out.loss.item())
+                dv["asr"].append(out.loss_asr.item()   if out.loss_asr  else 0.0)
+                dv["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
+                dv["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
 
-        mean_dev = {k: float(np.mean(v)) for k, v in dev_losses.items()}
+        mean_dv = {k: float(np.mean(v)) for k, v in dv.items()}
 
-        print(
-            f"Epoch {epoch} | "
-            f"train={mean_train['total']:.4f} (asr={mean_train['asr']:.4f} ctc={mean_train['ctc']:.4f}) | "
-            f"dev={mean_dev['total']:.4f}   (asr={mean_dev['asr']:.4f} ctc={mean_dev['ctc']:.4f})"
-        )
+        print(f"Epoch {epoch}"
+              f" | train total={mean_tr['total']:.4f}"
+              f" (asr={mean_tr['asr']:.4f} ctc={mean_tr['ctc']:.4f} feat={mean_tr['feat']:.4f})"
+              f" | dev total={mean_dv['total']:.4f}"
+              f" (asr={mean_dv['asr']:.4f} ctc={mean_dv['ctc']:.4f} feat={mean_dv['feat']:.4f})")
 
-        history.append({"epoch": epoch, "train": mean_train, "dev": mean_dev})
+        history.append({"epoch": epoch, "train": mean_tr, "dev": mean_dv})
 
         if use_wandb:
             import wandb
-            wandb.log({
-                "epoch":          epoch,
-                "train/total":    mean_train["total"],
-                "train/asr":      mean_train["asr"],
-                "train/ctc":      mean_train["ctc"],
-                "dev/total":      mean_dev["total"],
-                "dev/asr":        mean_dev["asr"],
-                "dev/ctc":        mean_dev["ctc"],
-            })
+            wandb.log({"epoch": epoch,
+                       **{f"train/{k}": v for k, v in mean_tr.items()},
+                       **{f"dev/{k}":   v for k, v in mean_dv.items()}})
 
-        # --- Checkpoint --
-        if mean_dev["total"] < best_dev_loss:
-            best_dev_loss = mean_dev["total"]
+        # Checkpoint
+        if mean_dv["total"] < best_dev_loss:
+            best_dev_loss = mean_dv["total"]
             ckpt = out_dir / "best"
             model.whisper.save_pretrained(str(ckpt))
             processor.save_pretrained(str(ckpt))
             torch.save(model.ctc_head.state_dict(),  out_dir / "best_ctc_head.pt")
             torch.save(model.feat_head.state_dict(), out_dir / "best_feat_head.pt")
-            print(f"  ✓ Checkpoint saved (dev={best_dev_loss:.4f}) -> {ckpt}")
+            print(f"  ✓ Checkpoint (dev={best_dev_loss:.4f}) → {ckpt}")
 
-    # ---- Persist history ------------------------------------------------
-    history_path = out_dir / "history.json"
-    with open(history_path, "w") as f:
-        json.dump({"run": args.run_name, "args": vars(args), "history": history}, f, indent=2, default=str)
-    print(f"\\nDone. History -> {history_path}")
-
+    # Save history
+    hist_path = out_dir / "history.json"
+    hist_path.write_text(
+        json.dumps({"run": args.run_name, "args": vars(args), "history": history},
+                   indent=2, default=str)
+    )
+    print(f"Done. History → {hist_path}")
     if use_wandb:
-        import wandb
-        wandb.finish()
+        import wandb; wandb.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +316,7 @@ def train(args):
 # ---------------------------------------------------------------------------
 
 def main():
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description="Train Whisper with auxiliary phonology heads")
     p.add_argument("--run_name",    default="ctc_only")
     p.add_argument("--data_root",   default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--output_dir",  default="models/aux_ctc")
@@ -286,7 +326,6 @@ def main():
     p.add_argument("--batch_size",  type=int,   default=16)
     p.add_argument("--lr",          type=float, default=1e-4)
     p.add_argument("--log_every",   type=int,   default=50)
-    p.add_argument("--max_utts",    type=int,   default=None)
     p.add_argument("--wandb",       action="store_true")
     train(p.parse_args())
 

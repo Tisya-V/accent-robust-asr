@@ -53,7 +53,6 @@ PROBE_PHONES = {
     "TH",  # dental fricative — notoriously absent outside English
     "S",   # sibilant — place of articulation varies by L1
 }
-PHONEME_FEATURE_DIM = 24   # panphon articulatory feature vector dimension
 
 # ---------------------------------------------------------------------------
 # Results directories
