@@ -1,82 +1,86 @@
 """
 eval_model_perf.py
-Inference + WER/CER computation for baseline comparison.
-Designed to run as a SLURM job — all compute-heavy work happens here,
-results cached to CSV for later notebook visualisation.
+Inference + WER/CER computation across models and splits.
+Designed to run as a SLURM job — results cached to CSV for notebook visualisation.
+
+Scripted  → 6 held-out test speakers, never seen during training.
+Spontaneous → suitcase corpus (OOD, all speakers).
 
 Usage:
-    python eval_model_perf.py --models baseline,baseline_lora --splits scripted,spontaneous
+    python eval_model_perf.py --models baseline,baseline_lora --splits scripted spontaneous
     python eval_model_perf.py --models ctc_aux --splits scripted
 
-    # Or via SLURM:
+    # Via SLURM:
     sbatch --gres=gpu:1 --wrap="python eval_model_perf.py --models baseline,baseline_lora"
+
+Output:
+    results/model_perf_comparison/{model_key}_scripted_predictions.csv
+    results/model_perf_comparison/{model_key}_spontaneous_predictions.csv
 """
 
+from __future__ import annotations
+
 import argparse
-import os
 import re
-import torch
-import pandas as pd
 from pathlib import Path
-from jiwer import wer as jiwer_wer, cer as jiwer_cer
 
-from src.utils.audio_utils import bytes_to_array
-from src.utils.load_l2arctic import load_scripted, load_spontaneous, split_dataset
-from src.utils.model_loader import get_model_registry
+import pandas as pd
+import torch
+from jiwer import cer as jiwer_cer
+from jiwer import wer as jiwer_wer
+from tqdm import tqdm
+
 from src.config import LOCAL_L2ARCTIC_DIR
+from src.utils.load_l2arctic import load_test_utterances
+from src.utils.model_loader import get_model_registry
 
-BASELINE_ID = "openai/whisper-small"
-BATCH_SIZE  = 8
+
+BATCH_SIZE = 8
 
 
 # ---------------------------------------------------------------------------
-# Text normalisation helpers
+# Text normalisation
 # ---------------------------------------------------------------------------
 
-def norm(s):
-    if not isinstance(s, str): return ""
+
+def norm(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
     s = s.lower().strip()
-    s = re.sub(r"[^\w\s]", "", s)
-    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"[^\\w\\s]", "", s)
+    s = re.sub(r"\\s+", " ", s).strip()
     return s
-
-
-def add_normalized_columns(df, ref_col="text", pred_col="prediction"):
-    df = df.copy()
-    df["reference_norm"]  = df[ref_col].apply(norm)
-    df["prediction_norm"] = df[pred_col].apply(norm)
-    return df
-
-
-def attach_utterance_stats(df):
-    df = df.copy()
-    df["ref_num_words"] = df["reference_norm"].str.split().str.len()
-    df["ref_num_chars"] = df["reference_norm"].str.len()
-    return df
-
-
-def attach_utt_wer(df, ref_col="reference_norm", pred_col="prediction_norm"):
-    df = df.copy()
-    df["utt_wer"] = df.apply(
-        lambda r: jiwer_wer(r[ref_col], r[pred_col]) if r[ref_col] else None, axis=1
-    )
-    df["utt_cer"] = df.apply(
-        lambda r: jiwer_cer(r[ref_col], r[pred_col]) if r[ref_col] else None, axis=1
-    )
-    return df
 
 
 # ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
-def transcribe(df, processor, model, device, batch_size=BATCH_SIZE):
+
+def transcribe(
+    utterances: list[dict],
+    processor,
+    model,
+    device:     str,
+    batch_size: int = BATCH_SIZE,
+) -> list[str]:
+    import librosa
+    import soundfile as sf
+
     predictions = []
-    for start in range(0, len(df), batch_size):
-        batch_df     = df.iloc[start:start + batch_size]
-        audio_arrays = [bytes_to_array(row["audio"]["bytes"]) for _, row in batch_df.iterrows()]
-        inputs       = processor(
-            audio_arrays, sampling_rate=16000,
+    pbar = tqdm(range(0, len(utterances), batch_size),
+                desc="  transcribing", unit="batch", dynamic_ncols=True)
+    for start in pbar:
+        batch  = utterances[start : start + batch_size]
+        audios = []
+        for utt in batch:
+            audio, sr = sf.read(utt["wav_path"], dtype="float32", always_2d=False)
+            if sr != 16000:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+            audios.append(audio)
+
+        inputs = processor(
+            audios, sampling_rate=16000,
             return_tensors="pt", truncation=True, return_attention_mask=True,
         )
         with torch.no_grad():
@@ -86,42 +90,71 @@ def transcribe(df, processor, model, device, batch_size=BATCH_SIZE):
                 language="en", task="transcribe",
             )
         predictions.extend(processor.batch_decode(pred_ids, skip_special_tokens=True))
-        if (start // batch_size) % 10 == 0:
-            print(f"  {start}/{len(df)}", end="\r")
-    print(f"  {len(df)}/{len(df)} done")
     return predictions
 
 
-def build_results(df, predictions):
-    results = df.drop(columns=["audio"]).copy()
-    results["prediction"] = predictions
-    results = add_normalized_columns(results)
-    results = attach_utterance_stats(results)
-    results = attach_utt_wer(results)
-    return results
+# ---------------------------------------------------------------------------
+# Results assembly
+# ---------------------------------------------------------------------------
+
+
+def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFrame:
+    rows = []
+    for utt, pred in zip(utterances, predictions):
+        ref   = norm(utt["text"])
+        pred_n = norm(pred)
+        rows.append({
+            "utterance_id":    utt["utterance_id"],
+            "speaker":         utt["speaker"],
+            "l1":              utt["l1"],
+            "domain":          utt["domain"],
+            "wav_path":        utt["wav_path"],
+            "text":            utt["text"],
+            "prediction":      pred,
+            "reference_norm":  ref,
+            "prediction_norm": pred_n,
+            "ref_num_words":   len(ref.split()),
+            "ref_num_chars":   len(ref),
+            "utt_wer":         float(jiwer_wer(ref, pred_n)) if ref else None,
+            "utt_cer":         float(jiwer_cer(ref, pred_n)) if ref else None,
+        })
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
 # Per-split, per-model runner
 # ---------------------------------------------------------------------------
 
-def run_one(model_key, split, df, registry, device, output_dir):
+
+def run_one(
+    model_key:  str,
+    split:      str,
+    utterances: list[dict],
+    registry:   dict,
+    device:     str,
+    output_dir: str,
+) -> None:
     out_path = Path(output_dir) / f"{model_key}_{split}_predictions.csv"
     if out_path.exists():
-        print(f"  [skip] {out_path} already exists")
+        print(f"  [skip] {out_path} already exists — delete to re-run")
         return
 
-    print(f"  Loading model [{model_key}] …")
+    print(f"  Loading model [{model_key}] ...")
     model, processor = registry[model_key]["loader"]()
     model.eval()
     model.generation_config.suppress_tokens       = None
     model.generation_config.begin_suppress_tokens = None
 
-    print(f"  Transcribing {len(df)} utterances [{split}] …")
-    preds   = transcribe(df, processor, model, device)
-    results = build_results(df, preds)
+    print(f"  Transcribing {len(utterances):,} utterances [{split}] ...")
+    preds   = transcribe(utterances, processor, model, device)
+    results = build_results(utterances, preds)
     results.to_csv(out_path, index=False)
-    print(f"  Saved → {out_path}")
+
+    wer = float(jiwer_wer(results["reference_norm"].tolist(),
+                           results["prediction_norm"].tolist()))
+    cer = float(jiwer_cer(results["reference_norm"].tolist(),
+                           results["prediction_norm"].tolist()))
+    print(f"  WER={wer:.3f}  CER={cer:.3f}  →  {out_path}")
 
     del model
     torch.cuda.empty_cache()
@@ -131,43 +164,51 @@ def run_one(model_key, split, df, registry, device, output_dir):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--models",      default="baseline",
-                        help=f"Comma-separated model keys, options: {get_model_registry(device).keys()}")
-    parser.add_argument("--splits",      default="scripted,spontaneous",
-                        help="Comma-separated splits: scripted, spontaneous")
-    parser.add_argument("--output_dir",  default="results/model_perf_comparison")
-    parser.add_argument("--batch_size",  type=int, default=BATCH_SIZE)
-    args = parser.parse_args()
 
-    print(f"=== eval_model_perf === device={device}")
+    p = argparse.ArgumentParser()
+    p.add_argument("--data_root",  default=LOCAL_L2ARCTIC_DIR)
+    p.add_argument("--models",     default="baseline",
+                   help="Comma-separated keys from MODEL_REGISTRY")
+    p.add_argument("--splits",     default=["scripted", "spontaneous"],
+                   nargs="+",
+                   help="scripted  |  spontaneous  (space or comma separated)")
+    p.add_argument("--output_dir", default="results/model_perf_comparison")
+    p.add_argument("--batch_size", type=int, default=BATCH_SIZE)
+    args = p.parse_args()
 
+    # Support both --splits scripted spontaneous  and  --splits scripted,spontaneous
+    splits     = [s for tok in args.splits for s in tok.split(",")]
     model_keys = [k.strip() for k in args.models.split(",")]
-    splits     = [s.strip() for s in args.splits.split(",")]
-    registry   = get_model_registry(device)
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Load datasets once
-    datasets = {}
-    if "scripted" in splits:
-        scripted_df = load_scripted()
-        _, _, test  = split_dataset(scripted_df)
-        datasets["scripted"] = test.reset_index(drop=True)
-        print(f"Scripted test : {len(datasets['scripted'])} utterances")
-    if "spontaneous" in splits:
-        datasets["spontaneous"] = load_spontaneous().reset_index(drop=True)
-        print(f"Spontaneous   : {len(datasets['spontaneous'])} utterances")
+    print(f"=== eval_model_perf  device={device} ===")
+    print(f"    models : {model_keys}")
+    print(f"    splits : {splits}")
 
+    registry = get_model_registry(device)
     for key in model_keys:
         if key not in registry:
-            raise ValueError(f"Unknown model key: '{key}'. Available: {list(registry.keys())}")
-        print(f"\n[Model: {key}]")
-        for split, df in datasets.items():
-            run_one(key, split, df, registry, device, args.output_dir)
+            raise ValueError(f"Unknown model \'{key}\'. Available: {sorted(registry)}")
 
-    print("\nAll done.")
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Load utterances once per split — scripted and spontaneous are distinct corpora
+    datasets: dict[str, list[dict]] = {}
+    for split in splits:
+        if split not in ("scripted", "spontaneous"):
+            raise ValueError(f"Unknown split \'{split}\'. Choose: scripted, spontaneous")
+        utts = load_test_utterances(local_root=args.data_root, split=split)
+        datasets[split] = utts
+        print(f"  {split}: {len(utts):,} utterances")
+
+    for key in model_keys:
+        print(f"\\n[Model: {key}]")
+        for split, utterances in datasets.items():
+            run_one(key, split, utterances, registry, device, args.output_dir)
+
+    print("\\nAll done.")
 
 
 if __name__ == "__main__":

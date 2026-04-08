@@ -21,6 +21,9 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.probing.probe_phoneme "$@"
+for MODEL in "baseline" "baseline_lora" "ctc_aux"; do
+    echo -e "\n\nEvaluating model: $MODEL\n"
+    python -u -m src.eval.probing.probe_phoneme --models $MODEL 
+done
 
 echo "Phoneme probe evaluation completed."

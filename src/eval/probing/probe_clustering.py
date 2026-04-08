@@ -260,8 +260,6 @@ def main():
     p.add_argument("--data_root",            default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",               default="baseline",
                    help="Comma-separated model keys from MODEL_REGISTRY")
-    p.add_argument("--split",                default="scripted",
-                   choices=["scripted", "spontaneous", "all"])
     p.add_argument("--output_dir",           default="results/clustering")
     p.add_argument("--layers",               default=",".join(str(i) for i in range(WHISPER_N_ENCODER_LAYERS + 1)),
                    help="Comma-separated layer indices (default: all 13)")
@@ -269,7 +267,7 @@ def main():
                    help="Subset of layers to generate UMAP plots for (expensive)")
     p.add_argument("--focus_phones",         default="TH,DH,V,F,S,Z,T,D",
                    help="Phones to highlight in focus-phone UMAP plots")
-    p.add_argument("--max_utts_per_speaker", type=int, default=50)
+    p.add_argument("--max_utts_per_speaker", type=int, default=100)
     args = p.parse_args()
 
     print(f"=== Clustering  device={device} ===")
@@ -286,10 +284,9 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading utterances (split={args.split}) ...")
+    print(f"Loading utterances...")
     utterances = load_probe_utterances(
         local_root           = args.data_root,
-        split                = args.split,
         max_utts_per_speaker = args.max_utts_per_speaker,
     )
     print(f"  {len(utterances):,} utterances loaded")
@@ -307,7 +304,7 @@ def main():
             focus_phones  = focus_phones,
             device        = device,
             output_dir    = args.output_dir,
-            split         = args.split,
+            split         = "scripted",
         )
         del model
         torch.cuda.empty_cache()

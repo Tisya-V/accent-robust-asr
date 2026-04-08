@@ -139,10 +139,6 @@ def probe_model(
     for layer_idx in layer_indices:
         X, _, _, speakers = records_to_arrays(records, layer_idx)
 
-        if len(X) > 30_000:
-            idx = np.random.RandomState(42).choice(len(X), 30_000, replace=False)
-            X, speakers = X[idx], speakers[idx]
-
         result = run_speaker_probe(X, speakers, layer_idx, n_folds)
 
         if accent_results is not None:
@@ -180,12 +176,10 @@ def main():
     p.add_argument("--data_root",            default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",               default="baseline",
                    help="Comma-separated model keys from MODEL_REGISTRY")
-    p.add_argument("--split",                default="scripted",
-                   choices=["scripted", "spontaneous", "all"])
     p.add_argument("--output_dir",           default="results/speaker_probe")
     p.add_argument("--layers",               default=None,
                    help="Comma-separated layer indices (default: all)")
-    p.add_argument("--max_utts_per_speaker", type=int, default=50)
+    p.add_argument("--max_utts_per_speaker", type=int, default=100)
     p.add_argument("--n_folds",              type=int, default=5)
     p.add_argument("--accent_results",       default=None,
                    help="Path to accent_probe_{model_key}_{split}.json for "
@@ -215,10 +209,9 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"\nLoading utterances (split={args.split}) ...")
+    print(f"\nLoading utterances ...")
     utterances = load_probe_utterances(
         local_root           = args.data_root,
-        split                = args.split,
         max_utts_per_speaker = args.max_utts_per_speaker,
     )
     print(f"  {len(utterances):,} utterances loaded")
@@ -235,7 +228,7 @@ def main():
             n_folds        = args.n_folds,
             device         = device,
             output_dir     = args.output_dir,
-            split          = args.split,
+            split          = "scripted",
             accent_results = accent_results,
         )
         del model

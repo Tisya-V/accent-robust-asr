@@ -31,7 +31,10 @@ from transformers import (
 
 from src.config import LOCAL_L2ARCTIC_DIR, MODEL_ID
 from src.utils.load_l2arctic import load_train_dev_utterances, load_test_utterances
-
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 # ── Dataset ────────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,51 @@ def build_lora_model(
     return model
 
 
+# ── Plotting ───────────────────────────────────────────────────────────────────
+def plot_loss_curve(log_history: list[dict], out_path: Path) -> None:
+    """Plot train loss + dev loss/WER from Seq2SeqTrainer log_history."""
+    train_steps, train_loss         = [], []
+    dev_epochs, dev_loss, dev_wer   = [], [], []
+
+    for entry in log_history:
+        if "loss" in entry and "eval_loss" not in entry:
+            train_steps.append(entry["step"])
+            train_loss.append(entry["loss"])
+        if "eval_loss" in entry:
+            dev_epochs.append(entry.get("epoch", entry["step"]))
+            dev_loss.append(entry["eval_loss"])
+            if "eval_wer" in entry:
+                dev_wer.append(entry["eval_wer"])
+
+    has_wer = len(dev_wer) == len(dev_epochs)
+    fig, axes = plt.subplots(1, 2 if has_wer else 1,
+                             figsize=(10 if has_wer else 5, 4), squeeze=False)
+    axes = axes[0]
+
+    ax = axes[0]
+    ax.plot(train_steps, train_loss, color="#2196F3", alpha=0.4, label="train (step)")
+    ax2 = ax.twinx()
+    ax2.plot(dev_epochs, dev_loss, "s--", color="#FF5722", label="dev loss")
+    ax.set_xlabel("Step"); ax.set_ylabel("Train loss"); ax2.set_ylabel("Dev loss")
+    ax.set_title("Loss")
+    lines1, labs1 = ax.get_legend_handles_labels()
+    lines2, labs2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labs1 + labs2, fontsize=8)
+    ax.grid(alpha=0.3)
+
+    if has_wer:
+        ax = axes[1]
+        ax.plot(dev_epochs, dev_wer, "s-", color="#4CAF50")
+        ax.set_xlabel("Epoch"); ax.set_ylabel("WER")
+        ax.set_title("Dev WER"); ax.grid(alpha=0.3)
+
+    fig.suptitle("baseline_lora training curves", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Loss curve → {out_path}")
+
+
 # ── Training ───────────────────────────────────────────────────────────────────
 
 
@@ -199,6 +247,10 @@ def main():
     processor.save_pretrained(args.output_dir)
     print(f"Saved → {args.output_dir}")
 
+    # Plot loss curve
+    plot_loss_curve(trainer.state.log_history, Path(args.output_dir) / "loss_curve.png")
+
+    print("Done.")
 
 if __name__ == "__main__":
     main()

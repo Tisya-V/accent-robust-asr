@@ -9,6 +9,7 @@
 export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
 export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
 export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
+export MPLCONFIGDIR=/vol/bitbucket/$USER/.cache/matplotlib
 
 export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
 source activate

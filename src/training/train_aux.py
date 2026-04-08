@@ -27,12 +27,17 @@ from peft import LoraConfig, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import WhisperProcessor, get_linear_schedule_with_warmup
+from tqdm import tqdm
 
-from src.config import LOCAL_L2ARCTIC_DIR, MODEL_ID, RANDOM_SEED
+from src.config import LOCAL_L2ARCTIC_DIR, MODEL_ID
 from src.utils.load_l2arctic import load_train_dev_utterances
 from src.utils.textgrid import parse_textgrid
-from src.utils.phonology import PHON_FEATURE_MATRIX, PHONE2ID
+from src.utils.phonology import PHON_FEATURE_MATRIX
 from src.training.whisper_aux import WhisperWithAuxHeads
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 LORA_CONFIG = LoraConfig(
@@ -48,12 +53,8 @@ LORA_CONFIG = LoraConfig(
 # Collator
 # ---------------------------------------------------------------------------
 
-class AuxCollator:
-    """
-    Collates utterance dicts into batches for WhisperWithAuxHeads.
-    Builds CTC phone sequences and (optionally) feature targets from TextGrids.
-    """
 
+class AuxCollator:
     def __init__(
         self,
         processor:     WhisperProcessor,
@@ -66,7 +67,6 @@ class AuxCollator:
         self.pad_id        = processor.tokenizer.pad_token_id
 
     def __call__(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # Load audio
         audios = []
         for it in items:
             audio, sr = sf.read(it["wav_path"], dtype="float32", always_2d=False)
@@ -74,12 +74,10 @@ class AuxCollator:
                 audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
             audios.append(audio)
 
-        # Log-mel features
         input_features = self.processor(
             audios, sampling_rate=16000, return_tensors="pt", padding="max_length",
-        ).input_features                                         # (B, 80, 3000)
+        ).input_features
 
-        # Decoder labels
         labels = self.processor.tokenizer(
             [it["text"] for it in items],
             return_tensors="pt", padding=True,
@@ -87,13 +85,11 @@ class AuxCollator:
         ).input_ids.clone()
         labels[labels == self.pad_id] = -100
 
-        # CTC targets — one phone sequence per utterance
-        T_enc = input_features.shape[-1] // 2               # 1500 frames after conv
-        B     = len(items)
+        T_enc             = input_features.shape[-1] // 2
+        B                 = len(items)
         ctc_input_lengths = torch.full((B,), T_enc, dtype=torch.long)
 
-        ctc_seqs, ctc_lengths = [], []
-        feat_targets_list, feat_frame_spans = [], []
+        ctc_seqs, ctc_lengths, feat_targets_list, feat_frame_spans = [], [], [], []
 
         for it in items:
             try:
@@ -141,6 +137,7 @@ class AuxCollator:
 # Dataset
 # ---------------------------------------------------------------------------
 
+
 class L2ArcticDataset(Dataset):
     def __init__(self, utterances): self.utterances = utterances
     def __len__(self):              return len(self.utterances)
@@ -148,8 +145,64 @@ class L2ArcticDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# Loss curve
+# ---------------------------------------------------------------------------
+
+
+def plot_loss_curve(history: list[dict], out_path: Path) -> None:
+    epochs     = [h["epoch"]           for h in history]
+    train_tot  = [h["train"]["total"]  for h in history]
+    dev_tot    = [h["dev"]["total"]    for h in history]
+    train_asr  = [h["train"]["asr"]    for h in history]
+    dev_asr    = [h["dev"]["asr"]      for h in history]
+    train_ctc  = [h["train"]["ctc"]    for h in history]
+    dev_ctc    = [h["dev"]["ctc"]      for h in history]
+    train_feat = [h["train"]["feat"]   for h in history]
+    dev_feat   = [h["dev"]["feat"]     for h in history]
+
+    has_ctc  = any(v > 0 for v in train_ctc)
+    has_feat = any(v > 0 for v in train_feat)
+    n_panels = 1 + has_ctc + has_feat
+
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), squeeze=False)
+    axes = axes[0]
+
+    # Total loss
+    ax = axes[0]
+    ax.plot(epochs, train_tot, "o-",  label="train", color="#2196F3")
+    ax.plot(epochs, dev_tot,   "s--", label="dev",   color="#FF5722")
+    ax.set_title("Total loss"); ax.set_xlabel("Epoch"); ax.set_ylabel("Loss")
+    ax.legend(); ax.grid(alpha=0.3)
+
+    panel = 1
+    if has_ctc:
+        ax = axes[panel]
+        ax.plot(epochs, train_asr,  "o-",  label="train ASR",  color="#2196F3")
+        ax.plot(epochs, dev_asr,    "s--", label="dev ASR",    color="#FF5722")
+        ax.plot(epochs, train_ctc,  "o-",  label="train CTC",  color="#4CAF50")
+        ax.plot(epochs, dev_ctc,    "s--", label="dev CTC",    color="#FF9800")
+        ax.set_title("ASR + CTC loss"); ax.set_xlabel("Epoch")
+        ax.legend(); ax.grid(alpha=0.3)
+        panel += 1
+
+    if has_feat:
+        ax = axes[panel]
+        ax.plot(epochs, train_feat, "o-",  label="train feat", color="#9C27B0")
+        ax.plot(epochs, dev_feat,   "s--", label="dev feat",   color="#E91E63")
+        ax.set_title("Feature BCE loss"); ax.set_xlabel("Epoch")
+        ax.legend(); ax.grid(alpha=0.3)
+
+    fig.suptitle(f"Training curves", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Loss curve → {out_path}")
+
+
+# ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
+
 
 def train(args) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -160,7 +213,6 @@ def train(args) -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Data
     print("Loading utterances ...")
     train_utts, dev_utts = load_train_dev_utterances(local_root=args.data_root)
     print(f"  train={len(train_utts)}  dev={len(dev_utts)}")
@@ -174,11 +226,10 @@ def train(args) -> None:
         shuffle=True,  collate_fn=collator, pin_memory=(device == "cuda"),
     )
     dev_loader = DataLoader(
-        L2ArcticDataset(dev_utts),   batch_size=args.batch_size,
+        L2ArcticDataset(dev_utts), batch_size=args.batch_size,
         shuffle=False, collate_fn=collator, pin_memory=(device == "cuda"),
     )
 
-    # Model + LoRA
     print("Building model ...")
     model = WhisperWithAuxHeads(
         model_name  = MODEL_ID,
@@ -191,19 +242,17 @@ def train(args) -> None:
     model.whisper.print_trainable_parameters()
     model = model.to(device)
 
-    # Optimiser
-    optimizer    = AdamW(
+    optimizer   = AdamW(
         model.param_groups(base_lr=args.lr, head_lr=args.lr * 10),
         weight_decay=0.01,
     )
-    total_steps  = len(train_loader) * args.epochs
-    scheduler    = get_linear_schedule_with_warmup(
+    total_steps = len(train_loader) * args.epochs
+    scheduler   = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps   = max(1, total_steps // 10),
         num_training_steps = total_steps,
     )
 
-    # W&B
     use_wandb = False
     if args.wandb:
         try:
@@ -217,11 +266,14 @@ def train(args) -> None:
     history       = []
 
     for epoch in range(1, args.epochs + 1):
+
         # --- Train ---
         model.train()
-        tr = {"total": [], "asr": [], "ctc": [], "feat": []}
+        tr      = {"total": [], "asr": [], "ctc": [], "feat": []}
+        pbar    = tqdm(train_loader, desc=f"Ep {epoch}/{args.epochs} [train]",
+                       unit="batch", dynamic_ncols=True)
 
-        for step, batch in enumerate(train_loader):
+        for batch in pbar:
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
 
@@ -244,20 +296,22 @@ def train(args) -> None:
             tr["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
             tr["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
 
-            if step % args.log_every == 0:
-                print(f"  Ep {epoch} {step:4d}/{len(train_loader)}"
-                      f" | total={tr['total'][-1]:.4f}"
-                      f" asr={tr['asr'][-1]:.4f}"
-                      f" ctc={tr['ctc'][-1]:.4f}"
-                      f" feat={tr['feat'][-1]:.4f}")
+            pbar.set_postfix(
+                total = f"{tr['total'][-1]:.3f}",
+                asr   = f"{tr['asr'][-1]:.3f}",
+                ctc   = f"{tr['ctc'][-1]:.3f}",
+            )
 
         mean_tr = {k: float(np.mean(v)) for k, v in tr.items()}
 
         # --- Dev ---
         model.eval()
-        dv = {"total": [], "asr": [], "ctc": [], "feat": []}
+        dv   = {"total": [], "asr": [], "ctc": [], "feat": []}
+        pbar = tqdm(dev_loader, desc=f"Ep {epoch}/{args.epochs} [dev]  ",
+                    unit="batch", dynamic_ncols=True)
+
         with torch.no_grad():
-            for batch in dev_loader:
+            for batch in pbar:
                 batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                          for k, v in batch.items()}
                 out = model(
@@ -274,13 +328,19 @@ def train(args) -> None:
                 dv["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
                 dv["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
 
+                pbar.set_postfix(
+                    total = f"{np.mean(dv['total']):.3f}",
+                    asr   = f"{np.mean(dv['asr']):.3f}",
+                    ctc   = f"{np.mean(dv['ctc']):.3f}",
+                )
+
         mean_dv = {k: float(np.mean(v)) for k, v in dv.items()}
 
-        print(f"Epoch {epoch}"
-              f" | train total={mean_tr['total']:.4f}"
-              f" (asr={mean_tr['asr']:.4f} ctc={mean_tr['ctc']:.4f} feat={mean_tr['feat']:.4f})"
-              f" | dev total={mean_dv['total']:.4f}"
-              f" (asr={mean_dv['asr']:.4f} ctc={mean_dv['ctc']:.4f} feat={mean_dv['feat']:.4f})")
+        print(
+            f"Epoch {epoch:>2} summary | "
+            f"train  total={mean_tr['total']:.4f}  asr={mean_tr['asr']:.4f}  ctc={mean_tr['ctc']:.4f}  feat={mean_tr['feat']:.4f} | "
+            f"dev    total={mean_dv['total']:.4f}  asr={mean_dv['asr']:.4f}  ctc={mean_dv['ctc']:.4f}  feat={mean_dv['feat']:.4f}"
+        )
 
         history.append({"epoch": epoch, "train": mean_tr, "dev": mean_dv})
 
@@ -290,7 +350,6 @@ def train(args) -> None:
                        **{f"train/{k}": v for k, v in mean_tr.items()},
                        **{f"dev/{k}":   v for k, v in mean_dv.items()}})
 
-        # Checkpoint
         if mean_dv["total"] < best_dev_loss:
             best_dev_loss = mean_dv["total"]
             ckpt = out_dir / "best"
@@ -300,12 +359,12 @@ def train(args) -> None:
             torch.save(model.feat_head.state_dict(), out_dir / "best_feat_head.pt")
             print(f"  ✓ Checkpoint (dev={best_dev_loss:.4f}) → {ckpt}")
 
-    # Save history
     hist_path = out_dir / "history.json"
     hist_path.write_text(
         json.dumps({"run": args.run_name, "args": vars(args), "history": history},
                    indent=2, default=str)
     )
+    plot_loss_curve(history, out_dir / "loss_curve.png")
     print(f"Done. History → {hist_path}")
     if use_wandb:
         import wandb; wandb.finish()
@@ -314,6 +373,7 @@ def train(args) -> None:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main():
     p = argparse.ArgumentParser(description="Train Whisper with auxiliary phonology heads")
@@ -325,7 +385,6 @@ def main():
     p.add_argument("--epochs",      type=int,   default=5)
     p.add_argument("--batch_size",  type=int,   default=16)
     p.add_argument("--lr",          type=float, default=1e-4)
-    p.add_argument("--log_every",   type=int,   default=50)
     p.add_argument("--wandb",       action="store_true")
     train(p.parse_args())
 

@@ -20,6 +20,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.eval_model_perf "$@"
+python -u -m src.eval.eval_model_perf --models "baseline","baseline_lora","ctc_aux"
 
 echo "Training completed."

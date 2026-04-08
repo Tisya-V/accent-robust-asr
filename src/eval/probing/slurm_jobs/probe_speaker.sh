@@ -21,6 +21,9 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.probing.probe_speaker "$@"
+for MODEL in "baseline" "baseline_lora" "ctc_aux"; do
+    echo -e "\n\nEvaluating model: $MODEL\n"
+    python -u -m src.eval.probing.probe_speaker --models $MODEL --accent_results "results/probing/accent_probe_${MODEL}_scripted.json"
+done
 
 echo "Speaker probe evaluation completed."

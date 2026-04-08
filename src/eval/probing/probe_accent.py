@@ -126,14 +126,6 @@ def probe_model(
     for layer_idx in layer_indices:
         X, phone_ids, l1_ids, speakers = records_to_arrays(records, layer_idx)
 
-        # Subsample if very large — stratified by speaker to preserve balance
-        if len(X) > 30_000:
-            from sklearn.model_selection import train_test_split
-            _, X, _, phone_ids, _, l1_ids, _, speakers = train_test_split(
-                X, phone_ids, l1_ids, speakers,
-                test_size=30_000, random_state=42, stratify=speakers,
-            )
-
         global_result = run_accent_probe(X, l1_ids, speakers, n_folds=n_folds)
         print(f"  Layer {layer_idx:2d} | acc={global_result['accuracy']:.3f}"
               f"  macro-F1={global_result['macro_f1']:.3f}"
@@ -174,12 +166,10 @@ def main():
     p.add_argument("--data_root",            default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",               default="baseline",
                    help="Comma-separated model keys from MODEL_REGISTRY")
-    p.add_argument("--split",                default="scripted",
-                   choices=["scripted", "spontaneous", "all"])
     p.add_argument("--output_dir",           default="results/accent_probe")
     p.add_argument("--layers",               default=None,
                    help="Comma-separated layer indices (default: all)")
-    p.add_argument("--max_utts_per_speaker", type=int, default=50)
+    p.add_argument("--max_utts_per_speaker", type=int, default=100)
     p.add_argument("--n_folds",              type=int, default=5)
     p.add_argument("--within_phoneme",       action="store_true")
     args = p.parse_args()
@@ -200,10 +190,9 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"\nLoading utterances (split={args.split}) ...")
+    print(f"\nLoading utterances ...")
     utterances = load_probe_utterances(
         local_root           = args.data_root,
-        split                = args.split,
         max_utts_per_speaker = args.max_utts_per_speaker,
     )
     print(f"  {len(utterances):,} utterances loaded")
@@ -221,7 +210,7 @@ def main():
             within_phoneme = args.within_phoneme,
             device         = device,
             output_dir     = args.output_dir,
-            split          = args.split,
+            split          = "scripted",
         )
         del model
         torch.cuda.empty_cache()

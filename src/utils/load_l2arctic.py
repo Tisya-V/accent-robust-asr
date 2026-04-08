@@ -122,12 +122,11 @@ def _load_raw_scripted(
 
 def load_test_utterances(
     local_root: str | Path = LOCAL_L2ARCTIC_DIR,
+    split: str = "scripted",
 ) -> List[Dict]:
-    """Held-out test speakers (6 speakers, one per L1). Never seen during training."""
-    utts = _load_raw_scripted(Path(local_root), TEST_SPEAKERS, "test")
-    print(f"[load_test_utterances]  {len(utts)} utterances "
-          f"from {len(TEST_SPEAKERS)} held-out speakers")
-    return utts
+    if split == "spontaneous":
+        return load_suitcase_corpus(local_root)
+    return _load_raw_scripted(Path(local_root), TEST_SPEAKERS, "test")
 
 
 def load_train_dev_utterances(

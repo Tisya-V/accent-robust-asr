@@ -26,20 +26,9 @@ import torch
 from tqdm import tqdm
 
 from src.config import (
-    ENCODER_FRAME_RATE,
     L1_2_ID,
-    SILENCE_LABELS,
     SPEAKER_L1,
     WHISPER_N_ENCODER_LAYERS,
-)
-from src.utils.phonology import (
-    ARPABET_VOCAB,
-    NUM_PHONES,
-    NUM_PHON_FEATURES,
-    PHON_FEATURE_MATRIX,
-    PHON_FEATURE_NAMES,
-    PHONE2ID,
-    phone_to_features,
 )
 from src.utils.textgrid import parse_textgrid
 

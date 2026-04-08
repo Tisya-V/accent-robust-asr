@@ -116,10 +116,6 @@ def probe_model(
             print(f"  Layer {layer_idx:2d} | skipped (too few samples: {len(X)})")
             continue
 
-        if len(X) > 30_000:
-            idx = np.random.RandomState(42).choice(len(X), 30_000, replace=False)
-            X, phone_ids, speakers = X[idx], phone_ids[idx], speakers[idx]
-
         layer_results[str(layer_idx)] = run_phoneme_probe(
             X, phone_ids, speakers, layer_idx, n_folds,
         )
@@ -146,12 +142,10 @@ def main():
     p.add_argument("--data_root",            default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",               default="baseline",
                    help="Comma-separated model keys from MODEL_REGISTRY")
-    p.add_argument("--split",                default="scripted",
-                   choices=["scripted", "spontaneous", "all"])
     p.add_argument("--output_dir",           default="results/phoneme_probe")
     p.add_argument("--layers",               default=None,
                    help="Comma-separated layer indices (default: all)")
-    p.add_argument("--max_utts_per_speaker", type=int, default=50)
+    p.add_argument("--max_utts_per_speaker", type=int, default=100)
     p.add_argument("--n_folds",              type=int, default=5)
     args = p.parse_args()
 
@@ -171,10 +165,9 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"\nLoading utterances (split={args.split}) ...")
+    print(f"\nLoading utterances...")
     utterances = load_probe_utterances(
         local_root           = args.data_root,
-        split                = args.split,
         max_utts_per_speaker = args.max_utts_per_speaker,
     )
     print(f"  {len(utterances):,} utterances loaded")
@@ -191,7 +184,7 @@ def main():
             n_folds       = args.n_folds,
             device        = device,
             output_dir    = args.output_dir,
-            split         = args.split,
+            split         = "scripted",
         )
         del model
         torch.cuda.empty_cache()
