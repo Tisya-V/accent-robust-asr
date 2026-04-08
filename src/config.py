@@ -1,15 +1,18 @@
 from pathlib import Path
 
-DATASET_NAME = "KoelLabs/L2Arctic"
+# Random seed for reproducibility
+RANDOM_SEED = 42
+
+# Model
+MODEL_ID           = "openai/whisper-small"
+ENCODER_FRAME_RATE = 50           # Whisper: 50 Hz (20ms per frame)
+WHISPER_HIDDEN_DIM = 768          # whisper-small
+WHISPER_N_ENCODER_LAYERS = 12     # whisper-small 
+
+# Dataset
 LOCAL_L2ARCTIC_DIR = Path("data/l2_arctic")
+SUITCASE_SUBDIR = "suitcase_corpus"
 
-# Hold out one speaker per L1 for testing
-# Even amount of f/m
-HELD_OUT_SPEAKERS = {"SKA", "BWC", "SVBI", "HJK", "EBVS", "HQTV"}
-
-
-# Silence / pause tokens to skip
-SILENCE_LABELS = {"SIL", "SP", "sil", "sp", "spn", "<eps>", ""}
 
 # L2-ARCTIC speaker → L1 mapping (all 24 speakers)
 SPEAKER_L1 = {
@@ -26,14 +29,19 @@ SPEAKER_L1 = {
     "HQTV": "Vietnamese", "PNV": "Vietnamese",
     "THV": "Vietnamese", "TLV": "Vietnamese",
 }
+
 SPEAKERS = sorted(SPEAKER_L1.keys())
+# Hold out one speaker per L1 for testing
+# Even amount of f/m
+TEST_SPEAKERS = {"SKA", "BWC", "SVBI", "HJK", "EBVS", "HQTV"}
+TRAIN_SPEAKERS = set(SPEAKERS) - TEST_SPEAKERS
 L1_GROUPS = sorted(set(SPEAKER_L1.values()))
 L1_2_ID   = {l1: i for i, l1 in enumerate(L1_GROUPS)}
 NUM_L1S   = len(L1_GROUPS)
 
-ENCODER_FRAME_RATE = 50          # Whisper: 50 Hz (20ms per frame)
-WHISPER_HIDDEN_DIM = 512         # whisper-small
-WHISPER_N_ENCODER_LAYERS = 6     # whisper-small has 6 encoder transformer layers
+
+# Silence / pause tokens to skip
+SILENCE_LABELS = {"SIL", "SP", "sil", "sp", "spn", "<eps>", ""}
 
 # Linguistically motivated selection — phones most affected by L1 transfer
 PROBE_PHONES = {
@@ -45,3 +53,13 @@ PROBE_PHONES = {
     "TH",  # dental fricative — notoriously absent outside English
     "S",   # sibilant — place of articulation varies by L1
 }
+PHONEME_FEATURE_DIM = 24   # panphon articulatory feature vector dimension
+
+# ---------------------------------------------------------------------------
+# Results directories
+# ---------------------------------------------------------------------------
+
+RESULTS_DIR         = Path("results")
+PROBE_RESULTS_DIR   = RESULTS_DIR / "probe_analysis"
+CLUSTER_RESULTS_DIR = RESULTS_DIR / "clustering"
+MODEL_PERF_COMPARISON_DIR = RESULTS_DIR / "model_perf_comparison"

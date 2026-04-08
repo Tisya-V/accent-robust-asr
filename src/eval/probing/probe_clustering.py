@@ -36,12 +36,12 @@ import torch
 import umap as umap_lib
 
 from src.eval.probing.probe_utils import (
-    ARPABET_VOCAB, PHONE2ID, L1_GROUPS,
+    ARPABET_VOCAB, PHONE2ID,
     build_embedding_dataset, records_to_arrays, save_results,
 )
 from src.utils.load_l2arctic import load_probe_utterances
 from src.utils.model_loader import get_model_registry
-from src.config import LOCAL_L2ARCTIC_DIR
+from src.config import LOCAL_L2ARCTIC_DIR, L1_GROUPS
 
 
 # ---------------------------------------------------------------------------
