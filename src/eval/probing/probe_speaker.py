@@ -62,7 +62,7 @@ def run_speaker_probe(
                 "n_speakers": n_speakers, "n_samples": len(X)}
 
     all_preds, all_true = [], []
-    for _, (tr, te) in GroupKFold(n_splits=actual_folds).split(X, speaker_ids, speakers):
+    for tr, te in GroupKFold(n_splits=actual_folds).split(X, speaker_ids, speakers):
         scaler = StandardScaler()
         clf    = SGDClassifier(max_iter=300, loss="log_loss", random_state=42)
         clf.fit(scaler.fit_transform(X[tr]), speaker_ids[tr])
@@ -137,7 +137,8 @@ def probe_model(
 
     layer_results = {}
     for layer_idx in layer_indices:
-        X, _, _, speakers = records_to_arrays(records, layer_idx)
+        print(f"\nProbing layer {layer_idx}...")
+        X, _, _, speakers, _ = records_to_arrays(records, layer_idx)
 
         result = run_speaker_probe(X, speakers, layer_idx, n_folds)
 

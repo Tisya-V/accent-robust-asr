@@ -150,54 +150,69 @@ class L2ArcticDataset(Dataset):
 
 
 def plot_loss_curve(history: list[dict], out_path: Path) -> None:
-    epochs     = [h["epoch"]           for h in history]
-    train_tot  = [h["train"]["total"]  for h in history]
-    dev_tot    = [h["dev"]["total"]    for h in history]
-    train_asr  = [h["train"]["asr"]    for h in history]
-    dev_asr    = [h["dev"]["asr"]      for h in history]
-    train_ctc  = [h["train"]["ctc"]    for h in history]
-    dev_ctc    = [h["dev"]["ctc"]      for h in history]
-    train_feat = [h["train"]["feat"]   for h in history]
-    dev_feat   = [h["dev"]["feat"]     for h in history]
+    """
+    history entries have two shapes:
+      - epoch-level: {"epoch": int, "train": {...}, "dev": {...}}
+      - step-level:  {"step": int, "epoch": int, "train_step": {...}}
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    import numpy as np
 
-    has_ctc  = any(v > 0 for v in train_ctc)
-    has_feat = any(v > 0 for v in train_feat)
+    epoch_entries = [h for h in history if "train" in h and "dev" in h]
+    step_entries  = [h for h in history if "train_step" in h]
+
+    has_ctc  = any(h["train"].get("ctc",  0) > 0 for h in epoch_entries)
+    has_feat = any(h["train"].get("feat", 0) > 0 for h in epoch_entries)
     n_panels = 1 + has_ctc + has_feat
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), squeeze=False)
-    axes = axes[0]
+    fig = plt.figure(figsize=(6 * n_panels, 8))
+    gs  = gridspec.GridSpec(2, n_panels, hspace=0.45, wspace=0.35)
 
-    # Total loss
-    ax = axes[0]
-    ax.plot(epochs, train_tot, "o-",  label="train", color="#2196F3")
-    ax.plot(epochs, dev_tot,   "s--", label="dev",   color="#FF5722")
-    ax.set_title("Total loss"); ax.set_xlabel("Epoch"); ax.set_ylabel("Loss")
-    ax.legend(); ax.grid(alpha=0.3)
+    # ── Row 0: step-level train loss (or epoch if no steps logged) ────────────
+    for col, (metric, title) in enumerate(
+        [("total", "Total loss")]
+        + ([("ctc",  "CTC loss")]  if has_ctc  else [])
+        + ([("feat", "Feat loss")] if has_feat else [])
+    ):
+        ax = fig.add_subplot(gs[0, col])
 
-    panel = 1
-    if has_ctc:
-        ax = axes[panel]
-        ax.plot(epochs, train_asr,  "o-",  label="train ASR",  color="#2196F3")
-        ax.plot(epochs, dev_asr,    "s--", label="dev ASR",    color="#FF5722")
-        ax.plot(epochs, train_ctc,  "o-",  label="train CTC",  color="#4CAF50")
-        ax.plot(epochs, dev_ctc,    "s--", label="dev CTC",    color="#FF9800")
-        ax.set_title("ASR + CTC loss"); ax.set_xlabel("Epoch")
-        ax.legend(); ax.grid(alpha=0.3)
-        panel += 1
+        if step_entries:
+            steps  = [s["step"]                       for s in step_entries]
+            values = [s["train_step"].get(metric, 0)  for s in step_entries]
+            ax.plot(steps, values, lw=0.8, alpha=0.4, color="#2196F3", label="train (step)")
 
-    if has_feat:
-        ax = axes[panel]
-        ax.plot(epochs, train_feat, "o-",  label="train feat", color="#9C27B0")
-        ax.plot(epochs, dev_feat,   "s--", label="dev feat",   color="#E91E63")
-        ax.set_title("Feature BCE loss"); ax.set_xlabel("Epoch")
-        ax.legend(); ax.grid(alpha=0.3)
+            # smoothed rolling mean
+            window = max(1, len(values) // 40)
+            smooth = np.convolve(values, np.ones(window)/window, mode="valid")
+            ax.plot(steps[:len(smooth)], smooth, lw=1.8, color="#2196F3", label=f"train (smooth {window})")
+        else:
+            epochs     = [h["epoch"]              for h in epoch_entries]
+            train_vals = [h["train"].get(metric,0) for h in epoch_entries]
+            ax.plot(epochs, train_vals, "o-", lw=2, color="#2196F3", label="train")
 
-    fig.suptitle(f"Training curves", fontsize=13)
-    fig.tight_layout()
+        ax.set_title(f"{title} — train"); ax.set_xlabel("Step" if step_entries else "Epoch")
+        ax.set_ylabel("Loss"); ax.legend(fontsize=8); ax.grid(alpha=0.3)
+
+    # ── Row 1: epoch-level train vs dev (always available) ────────────────────
+    epochs = [h["epoch"] for h in epoch_entries]
+    for col, (metric, title) in enumerate(
+        [("total", "Total loss")]
+        + ([("ctc",  "CTC loss")]  if has_ctc  else [])
+        + ([("feat", "Feat loss")] if has_feat else [])
+    ):
+        ax = fig.add_subplot(gs[1, col])
+        ax.plot(epochs, [h["train"].get(metric,0) for h in epoch_entries],
+                "o-", lw=2, color="#2196F3", label="train")
+        ax.plot(epochs, [h["dev"].get(metric,0)   for h in epoch_entries],
+                "s--", lw=2, color="#FF5722", label="dev")
+        ax.set_title(f"{title} — train vs dev"); ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss"); ax.legend(fontsize=8); ax.grid(alpha=0.3)
+
+    fig.suptitle("Training curves", fontsize=13)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Loss curve → {out_path}")
-
 
 # ---------------------------------------------------------------------------
 # Training loop
@@ -264,6 +279,7 @@ def train(args) -> None:
 
     best_dev_loss = float("inf")
     history       = []
+    global_step   = 0
 
     for epoch in range(1, args.epochs + 1):
 
@@ -295,6 +311,14 @@ def train(args) -> None:
             tr["asr"].append(out.loss_asr.item()   if out.loss_asr  else 0.0)
             tr["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
             tr["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
+
+            global_step += 1
+            if global_step % 10 == 0:
+                history.append({
+                    "step":  global_step,
+                    "epoch": epoch,
+                    "train_step": {k: tr[k][-1] for k in tr},  # reuse already-appended values
+                })
 
             pbar.set_postfix(
                 total = f"{tr['total'][-1]:.3f}",
@@ -380,7 +404,7 @@ def main():
     p.add_argument("--run_name",    default="ctc_only")
     p.add_argument("--data_root",   default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--output_dir",  default="models/aux_ctc")
-    p.add_argument("--lambda_ctc",  type=float, default=0.3)
+    p.add_argument("--lambda_ctc",  type=float, default=0.1)
     p.add_argument("--lambda_feat", type=float, default=0.0)
     p.add_argument("--epochs",      type=int,   default=5)
     p.add_argument("--batch_size",  type=int,   default=16)

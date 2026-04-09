@@ -51,7 +51,7 @@ def run_phoneme_probe(
                 "per_phone_f1": {}, "n_samples": len(X)}
 
     all_preds, all_true = [], []
-    for _, (tr, te) in GroupKFold(n_splits=actual_folds).split(X, y, groups):
+    for tr, te in GroupKFold(n_splits=actual_folds).split(X, y, groups):
         scaler = StandardScaler()
         clf    = SGDClassifier(max_iter=300, loss="log_loss", random_state=42)
         clf.fit(scaler.fit_transform(X[tr]), y[tr])
@@ -107,7 +107,8 @@ def probe_model(
 
     layer_results = {}
     for layer_idx in layer_indices:
-        X, phone_ids, _, speakers = records_to_arrays(records, layer_idx)
+        print(f"\nProbing layer {layer_idx}...")
+        X, phone_ids, _, speakers, _ = records_to_arrays(records, layer_idx)
 
         valid = phone_ids >= 0
         X, phone_ids, speakers = X[valid], phone_ids[valid], speakers[valid]

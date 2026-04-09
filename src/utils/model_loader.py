@@ -173,6 +173,7 @@ def load_ctc_aux_full(
     # Load LoRA weights into whisper backbone
     model.whisper = PeftModel.from_pretrained(model.whisper, str(ckpt))
     model.whisper = model.whisper.merge_and_unload()
+    model._register_hooks()  # re-register hooks to capture from merged model
 
     # Load aux head weights
     if ctc_head_path.exists():

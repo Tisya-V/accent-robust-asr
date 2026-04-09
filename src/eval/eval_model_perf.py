@@ -1,10 +1,14 @@
 """
 eval_model_perf.py
-Inference + WER/CER computation across models and splits.
+Inference + WER/PER computation across models and splits.
 Designed to run as a SLURM job — results cached to CSV for notebook visualisation.
 
-Scripted  → 6 held-out test speakers, never seen during training.
-Spontaneous → suitcase corpus (OOD, all speakers).
+Scripted     → 6 held-out test speakers, never seen during training.
+Spontaneous  → suitcase corpus (OOD, all speakers).
+
+WER: word error rate on normalised text.
+PER: phoneme error rate — G2P(prediction) vs G2P(reference), both via g2p_en.
+     (text-derived, labels as "PER (G2P)" in reporting)
 
 Usage:
     python eval_model_perf.py --models baseline,baseline_lora --splits scripted spontaneous
@@ -14,8 +18,7 @@ Usage:
     sbatch --gres=gpu:1 --wrap="python eval_model_perf.py --models baseline,baseline_lora"
 
 Output:
-    results/model_perf_comparison/{model_key}_scripted_predictions.csv
-    results/model_perf_comparison/{model_key}_spontaneous_predictions.csv
+    results/model_perf_comparison/{model_key}_{split}_predictions.csv
 """
 
 from __future__ import annotations
@@ -26,36 +29,57 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-from jiwer import cer as jiwer_cer
 from jiwer import wer as jiwer_wer
 from tqdm import tqdm
 
-from src.config import LOCAL_L2ARCTIC_DIR
+from src.config import LOCAL_L2ARCTIC_DIR, NLTK_DATA_PATH
 from src.utils.load_l2arctic import load_test_utterances
 from src.utils.model_loader import get_model_registry
 
+import os
+import nltk
+nltk.data.path.insert(0, NLTK_DATA_PATH)
+os.environ["NLTK_DATA"] = NLTK_DATA_PATH
+
+import g2p_en
 
 BATCH_SIZE = 8
+
+_G2P = g2p_en.G2p()
+
+def text_to_phones(text: str) -> list[str]:
+    """Normalised text → ARPAbet phone list (stress digits stripped)."""
+    raw = _G2P(text)
+    return [p.rstrip("012") for p in raw if p.strip() and p[0].isalpha()]
+
+
+def utt_per(ref: str, pred: str) -> float | None:
+    """G2P-derived phoneme error rate for one utterance."""
+    if not ref:
+        return None
+    ref_phones  = " ".join(text_to_phones(ref))
+    pred_phones = " ".join(text_to_phones(pred))
+    if not ref_phones:
+        return None
+    return float(jiwer_wer(ref_phones, pred_phones))
 
 
 # ---------------------------------------------------------------------------
 # Text normalisation
 # ---------------------------------------------------------------------------
 
-
 def norm(s: str) -> str:
     if not isinstance(s, str):
         return ""
     s = s.lower().strip()
-    s = re.sub(r"[^\\w\\s]", "", s)
-    s = re.sub(r"\\s+", " ", s).strip()
+    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"\s+",     " ", s).strip()
     return s
 
 
 # ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
-
 
 def transcribe(
     utterances: list[dict],
@@ -97,11 +121,10 @@ def transcribe(
 # Results assembly
 # ---------------------------------------------------------------------------
 
-
 def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFrame:
     rows = []
     for utt, pred in zip(utterances, predictions):
-        ref   = norm(utt["text"])
+        ref    = norm(utt["text"])
         pred_n = norm(pred)
         rows.append({
             "utterance_id":    utt["utterance_id"],
@@ -114,9 +137,8 @@ def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFram
             "reference_norm":  ref,
             "prediction_norm": pred_n,
             "ref_num_words":   len(ref.split()),
-            "ref_num_chars":   len(ref),
             "utt_wer":         float(jiwer_wer(ref, pred_n)) if ref else None,
-            "utt_cer":         float(jiwer_cer(ref, pred_n)) if ref else None,
+            "utt_per":         utt_per(ref, pred_n),
         })
     return pd.DataFrame(rows)
 
@@ -124,7 +146,6 @@ def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFram
 # ---------------------------------------------------------------------------
 # Per-split, per-model runner
 # ---------------------------------------------------------------------------
-
 
 def run_one(
     model_key:  str,
@@ -152,9 +173,9 @@ def run_one(
 
     wer = float(jiwer_wer(results["reference_norm"].tolist(),
                            results["prediction_norm"].tolist()))
-    cer = float(jiwer_cer(results["reference_norm"].tolist(),
-                           results["prediction_norm"].tolist()))
-    print(f"  WER={wer:.3f}  CER={cer:.3f}  →  {out_path}")
+    per_vals = results["utt_per"].dropna()
+    per_str  = f"  PER={per_vals.mean():.3f}" if len(per_vals) else "  PER=n/a"
+    print(f"  WER={wer:.3f}{per_str}  →  {out_path}")
 
     del model
     torch.cuda.empty_cache()
@@ -164,7 +185,6 @@ def run_one(
 # Main
 # ---------------------------------------------------------------------------
 
-
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -172,20 +192,18 @@ def main():
     p.add_argument("--data_root",  default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",     default="baseline",
                    help="Comma-separated keys from MODEL_REGISTRY")
-    p.add_argument("--splits",     default=["scripted", "spontaneous"],
-                   nargs="+",
-                   help="scripted  |  spontaneous  (space or comma separated)")
+    p.add_argument("--splits",     default=["scripted", "spontaneous"], nargs="+",
+                   help="scripted | spontaneous  (space- or comma-separated)")
     p.add_argument("--output_dir", default="results/model_perf_comparison")
     p.add_argument("--batch_size", type=int, default=BATCH_SIZE)
     args = p.parse_args()
 
-    # Support both --splits scripted spontaneous  and  --splits scripted,spontaneous
     splits     = [s for tok in args.splits for s in tok.split(",")]
     model_keys = [k.strip() for k in args.models.split(",")]
 
     print(f"=== eval_model_perf  device={device} ===")
-    print(f"    models : {model_keys}")
-    print(f"    splits : {splits}")
+    print(f"    models  : {model_keys}")
+    print(f"    splits  : {splits}")
 
     registry = get_model_registry(device)
     for key in model_keys:
@@ -194,7 +212,6 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Load utterances once per split — scripted and spontaneous are distinct corpora
     datasets: dict[str, list[dict]] = {}
     for split in splits:
         if split not in ("scripted", "spontaneous"):

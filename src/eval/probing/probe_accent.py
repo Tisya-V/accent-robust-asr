@@ -51,7 +51,7 @@ def run_accent_probe(
         return {"accuracy": float("nan"), "macro_f1": float("nan"), "n_samples": len(X)}
 
     all_preds, all_true = [], []
-    for _, (tr, te) in GroupKFold(n_splits=actual_folds).split(X, l1_ids, speakers):
+    for tr, te in GroupKFold(n_splits=actual_folds).split(X, l1_ids, speakers):
         scaler = StandardScaler()
         clf    = SGDClassifier(max_iter=300, loss="log_loss", random_state=42)
         clf.fit(scaler.fit_transform(X[tr]), l1_ids[tr])
@@ -124,7 +124,8 @@ def probe_model(
 
     layer_results = {}
     for layer_idx in layer_indices:
-        X, phone_ids, l1_ids, speakers = records_to_arrays(records, layer_idx)
+        print(f"Probing layer {layer_idx}...")
+        X, phone_ids, l1_ids, speakers, _ = records_to_arrays(records, layer_idx)
 
         global_result = run_accent_probe(X, l1_ids, speakers, n_folds=n_folds)
         print(f"  Layer {layer_idx:2d} | acc={global_result['accuracy']:.3f}"

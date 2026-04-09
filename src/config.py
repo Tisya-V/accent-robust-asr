@@ -1,5 +1,10 @@
 from pathlib import Path
 
+import nltk as _nltk
+NLTK_DATA_PATH = "/vol/bitbucket/tsv22/accent-robust-asr/nltk_data"
+_nltk.data.path.insert(0, NLTK_DATA_PATH)
+
+
 # Random seed for reproducibility
 RANDOM_SEED = 42
 

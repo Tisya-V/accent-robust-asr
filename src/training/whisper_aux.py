@@ -78,25 +78,26 @@ class WhisperWithAuxHeads(nn.Module):
     # ------------------------------------------------------------------
     # Hooks
     # ------------------------------------------------------------------
-
     def _register_hooks(self) -> None:
         layers = self.whisper.model.encoder.layers
 
-        def _hook(store: str):
+        def _hook_detach(store: str):
             def _fn(module, inp, out):
                 hs = out[0] if isinstance(out, tuple) else out
-                setattr(self, store, hs)
+                setattr(self, store, hs.detach())   # CTC: detached
+            return _fn
+
+        def _hook_live(store: str):
+            def _fn(module, inp, out):
+                hs = out[0] if isinstance(out, tuple) else out
+                setattr(self, store, hs)            # Feat: live grad
             return _fn
 
         if self.lambda_ctc > 0:
-            layers[self.ctc_layer].register_forward_hook(_hook("_ctc_hidden"))
+            layers[self.ctc_layer].register_forward_hook(_hook_detach("_ctc_hidden"))
 
-        if self.lambda_feat > 0:
-            if self.feat_layer == self.ctc_layer:
-                # share — set in forward()
-                pass
-            else:
-                layers[self.feat_layer].register_forward_hook(_hook("_feat_hidden"))
+        if self.lambda_feat > 0 and self.feat_layer != self.ctc_layer:
+            layers[self.feat_layer].register_forward_hook(_hook_live("_feat_hidden"))
 
     # ------------------------------------------------------------------
     # Optimizer param groups
@@ -130,27 +131,13 @@ class WhisperWithAuxHeads(nn.Module):
         self._ctc_hidden  = None
         self._feat_hidden = None
 
-        # Shift labels for teacher-forcing: remove -100 from decoder input
-        decoder_input_ids = labels[:, :-1].clamp(min=0)
-
-        whisper_out = self.whisper.base_model(
-            input_features    = input_features,
-            decoder_input_ids = decoder_input_ids,
-            output_hidden_states = False,
-            return_dict          = True,
+        whisper_out = self.whisper(
+            input_features = input_features,
+            labels         = labels,
+            return_dict    = True,
         )
-
-        if self.lambda_feat > 0 and self.feat_layer == self.ctc_layer:
-            self._feat_hidden = self._ctc_hidden
-
-        # ASR cross-entropy
-        logits       = whisper_out.logits
-        shift_labels = labels[:, 1:].contiguous()
-        loss_asr = F.cross_entropy(
-            logits.reshape(-1, logits.size(-1)),
-            shift_labels.reshape(-1),
-            ignore_index=-100,
-        )
+        loss_asr = whisper_out.loss
+        logits   = whisper_out.logits
 
         loss_ctc  = None
         loss_feat = None

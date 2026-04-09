@@ -126,7 +126,11 @@ def load_test_utterances(
 ) -> List[Dict]:
     if split == "spontaneous":
         return load_suitcase_corpus(local_root)
-    return _load_raw_scripted(Path(local_root), TEST_SPEAKERS, "test")
+    utts = _load_raw_scripted(Path(local_root), TEST_SPEAKERS, "test")
+    for u in utts:
+        u["split"] = "test"
+    print(f"[load_test_utterances]  {len(utts)} utterances from {len(TEST_SPEAKERS)} speakers")
+    return utts
 
 
 def load_train_dev_utterances(

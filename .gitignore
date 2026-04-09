@@ -31,3 +31,4 @@ models/*/checkpoint-*/
 
 # Remove results from gitignore whilst we're still cooking
 results/
+nltk_data/
