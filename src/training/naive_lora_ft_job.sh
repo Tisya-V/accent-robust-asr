@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=whisper_lora_ft
+#SBATCH --job-name=lora_ft_heldout_chinese
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -21,7 +21,11 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 nvidia-smi
 
 python -u -m src.training.naive_lora_ft \
-    --output_dir models/baseline_loraft
+    --output_dir models/baseline_loraft_heldout_chinese \
+     --epochs 5 \
+     --batch_size 16 \
+     --lr 1e-4 \
+     --held_out_l1 Chinese
     # --epochs 5 \
     # --batch_size 8 \
     # --lr 1e-4 \

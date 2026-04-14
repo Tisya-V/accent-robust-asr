@@ -180,6 +180,8 @@ def main():
     parser.add_argument("--lr",         type=float, default=1e-4)
     parser.add_argument("--lora_r",     type=int,   default=8)
     parser.add_argument("--data_root",  default=LOCAL_L2ARCTIC_DIR)
+    parser.add_argument("--held_out_l1", default=None,
+               help="L1 group to exclude from training (e.g. 'Chinese')")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -187,7 +189,7 @@ def main():
     print(f"=== Naive LoRA Fine-Tuning  device={device} ===")
 
     print("Loading data ...")
-    train_utts, dev_utts = load_train_dev_utterances(local_root=args.data_root)
+    train_utts, dev_utts = load_train_dev_utterances(local_root=args.data_root, held_out_l1=args.held_out_l1)
     print(f"  train={len(train_utts)}  dev={len(dev_utts)}")
 
     processor = WhisperProcessor.from_pretrained(MODEL_ID)

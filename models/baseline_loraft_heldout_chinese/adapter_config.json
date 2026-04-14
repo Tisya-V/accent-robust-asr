@@ -32,7 +32,6 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "k_proj",
     "v_proj",
     "q_proj"
   ],

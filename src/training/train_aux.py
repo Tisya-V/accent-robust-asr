@@ -38,16 +38,61 @@ from src.training.whisper_aux import WhisperWithAuxHeads
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import evaluate
+from torch.amp import autocast
+
+wer_metric = evaluate.load("wer")
 
 
 LORA_CONFIG = LoraConfig(
     r              = 8,
     lora_alpha     = 16,
     lora_dropout   = 0.05,
-    target_modules = ["q_proj", "v_proj"],
+    target_modules=["q_proj", "k_proj", "v_proj"],
     inference_mode = False,
 )
 
+
+def evaluate_wer(model, dev_loader, processor, device, max_new_tokens=128, num_batches=None):
+    """Run autoregressive decoding on dev set and compute WER."""
+    model.eval()
+    all_preds, all_refs = [], []
+    
+    with torch.no_grad():
+        forced_decoder_ids = processor.get_decoder_prompt_ids(
+            language="en", task="transcribe"
+        )
+        for i, batch in enumerate(dev_loader):
+            if num_batches and i >= num_batches:
+                break
+            
+            input_features = batch["input_features"].to(device)
+            labels = batch["labels"]  # keep on CPU for decoding
+            
+            predicted_ids = model.generate(
+                input_features,
+                max_new_tokens=max_new_tokens,
+                forced_decoder_ids=forced_decoder_ids,
+            )
+            
+            # Decode predictions
+            preds = processor.tokenizer.batch_decode(
+                predicted_ids, skip_special_tokens=True
+            )
+            
+            # Decode references (replace -100 padding)
+            ref_ids = labels.clone()
+            ref_ids[ref_ids == -100] = processor.tokenizer.pad_token_id
+            refs = processor.tokenizer.batch_decode(
+                ref_ids, skip_special_tokens=True
+            )
+            
+            all_preds.extend(preds)
+            all_refs.extend(refs)
+    
+    model.train()
+    wer = wer_metric.compute(predictions=all_preds, references=all_refs)
+    return wer
 
 # ---------------------------------------------------------------------------
 # Collator
@@ -78,12 +123,13 @@ class AuxCollator:
             audios, sampling_rate=16000, return_tensors="pt", padding="max_length",
         ).input_features
 
-        labels = self.processor.tokenizer(
+        encoding = self.processor.tokenizer(
             [it["text"] for it in items],
             return_tensors="pt", padding=True,
-            truncation=True, max_length=self.max_label_len,
-        ).input_ids.clone()
-        labels[labels == self.pad_id] = -100
+            truncation=True,
+        )
+        labels = encoding.input_ids.clone()
+        labels[encoding.attention_mask == 0] = -100   # only masks real padding, not EOS
 
         T_enc             = input_features.shape[-1] // 2
         B                 = len(items)
@@ -161,10 +207,12 @@ def plot_loss_curve(history: list[dict], out_path: Path) -> None:
 
     epoch_entries = [h for h in history if "train" in h and "dev" in h]
     step_entries  = [h for h in history if "train_step" in h]
+    wer_entries   = [h for h in epoch_entries if "dev_wer" in h]
 
     has_ctc  = any(h["train"].get("ctc",  0) > 0 for h in epoch_entries)
     has_feat = any(h["train"].get("feat", 0) > 0 for h in epoch_entries)
-    n_panels = 1 + has_ctc + has_feat
+    has_wer  = len(wer_entries) > 0
+    n_panels = 1 + has_ctc + has_feat + has_wer
 
     fig = plt.figure(figsize=(6 * n_panels, 8))
     gs  = gridspec.GridSpec(2, n_panels, hspace=0.45, wspace=0.35)
@@ -209,11 +257,19 @@ def plot_loss_curve(history: list[dict], out_path: Path) -> None:
         ax.set_title(f"{title} — train vs dev"); ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss"); ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
+    
+    # In plot_loss_curve, add a WER panel if present:
+    if wer_entries:
+        ax_wer = fig.add_subplot(gs[1, n_panels - 1])  # or add a new column
+        ax_wer.plot([h["epoch"] for h in wer_entries],
+                    [h["dev_wer"] for h in wer_entries], "s-", color="#4CAF50")
+        ax_wer.set_title("Dev WER"); ax_wer.set_xlabel("Epoch")
+        ax_wer.set_ylabel("WER"); ax_wer.grid(alpha=0.3)
+
     fig.suptitle("Training curves", fontsize=13)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Loss curve → {out_path}")
-
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
@@ -228,8 +284,18 @@ def train(args) -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Save config
+    config_path = out_dir / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "args": vars(args),
+            "lora": LORA_CONFIG.to_dict(),
+        }, indent=2, default=str)
+    )
+    print(f"Config → {config_path}")
+
     print("Loading utterances ...")
-    train_utts, dev_utts = load_train_dev_utterances(local_root=args.data_root)
+    train_utts, dev_utts = load_train_dev_utterances(local_root=args.data_root, held_out_l1=args.held_out_l1)
     print(f"  train={len(train_utts)}  dev={len(dev_utts)}")
 
     processor = WhisperProcessor.from_pretrained(MODEL_ID)
@@ -250,12 +316,18 @@ def train(args) -> None:
         model_name  = MODEL_ID,
         lambda_ctc  = args.lambda_ctc,
         lambda_feat = args.lambda_feat,
+        ctc_layer   = args.ctc_layer,
+        feat_layer  = args.feat_layer,
     )
     for p in model.whisper.parameters():
         p.requires_grad = False
     model.whisper = get_peft_model(model.whisper, LORA_CONFIG)
     model.whisper.print_trainable_parameters()
     model = model.to(device)
+
+    model.whisper.config.forced_decoder_ids               = None
+    model.whisper.generation_config.suppress_tokens       = None
+    model.whisper.generation_config.begin_suppress_tokens = None
 
     optimizer   = AdamW(
         model.param_groups(base_lr=args.lr, head_lr=args.lr * 10),
@@ -268,6 +340,8 @@ def train(args) -> None:
         num_training_steps = total_steps,
     )
 
+    ctc_warmup_steps = 1 * len(train_loader)  # n epochs of linear warmup for CTC loss weight
+
     use_wandb = False
     if args.wandb:
         try:
@@ -277,9 +351,10 @@ def train(args) -> None:
         except ImportError:
             print("[WARN] wandb not installed, skipping")
 
-    best_dev_loss = float("inf")
+    best_wer = float("inf")
     history       = []
     global_step   = 0
+    scaler = torch.amp.GradScaler(device=device, enabled=(device == "cuda"))
 
     for epoch in range(1, args.epochs + 1):
 
@@ -292,27 +367,35 @@ def train(args) -> None:
         for batch in pbar:
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
+            
+            global_step += 1
+            model.lambda_ctc = args.lambda_ctc * min(1.0, global_step / ctc_warmup_steps)
 
-            out = model(
-                input_features     = batch["input_features"],
-                labels             = batch["labels"],
-                ctc_targets        = batch["ctc_targets"],
-                ctc_input_lengths  = batch["ctc_input_lengths"],
-                ctc_target_lengths = batch["ctc_target_lengths"],
-                feat_targets       = batch.get("feat_targets"),
-                feat_frame_spans   = batch.get("feat_frame_spans"),
-            )
 
-            out.loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step(); scheduler.step(); optimizer.zero_grad()
+            with autocast(device_type="cuda", dtype=torch.float16, enabled=(device == "cuda")):
+
+                out = model(
+                    input_features     = batch["input_features"],
+                    labels             = batch["labels"],
+                    ctc_targets        = batch["ctc_targets"],
+                    ctc_input_lengths  = batch["ctc_input_lengths"],
+                    ctc_target_lengths = batch["ctc_target_lengths"],
+                    feat_targets       = batch.get("feat_targets"),
+                    feat_frame_spans   = batch.get("feat_frame_spans"),
+                )
+            scaler.scale(out.loss).backward()
+            scaler.unscale_(optimizer)                                    # unscale first
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)      # then clip true grads
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
 
             tr["total"].append(out.loss.item())
             tr["asr"].append(out.loss_asr.item()   if out.loss_asr  else 0.0)
             tr["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
             tr["feat"].append(out.loss_feat.item() if out.loss_feat else 0.0)
 
-            global_step += 1
             if global_step % 10 == 0:
                 history.append({
                     "step":  global_step,
@@ -338,15 +421,19 @@ def train(args) -> None:
             for batch in pbar:
                 batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                          for k, v in batch.items()}
-                out = model(
-                    input_features     = batch["input_features"],
-                    labels             = batch["labels"],
-                    ctc_targets        = batch["ctc_targets"],
-                    ctc_input_lengths  = batch["ctc_input_lengths"],
-                    ctc_target_lengths = batch["ctc_target_lengths"],
-                    feat_targets       = batch.get("feat_targets"),
-                    feat_frame_spans   = batch.get("feat_frame_spans"),
-                )
+                
+                # Inside training loop:
+                with autocast(device_type="cuda", dtype=torch.float16, enabled=(device == "cuda")):
+                    out = model(
+                        input_features     = batch["input_features"],
+                        labels             = batch["labels"],
+                        ctc_targets        = batch["ctc_targets"],
+                        ctc_input_lengths  = batch["ctc_input_lengths"],
+                        ctc_target_lengths = batch["ctc_target_lengths"],
+                        feat_targets       = batch.get("feat_targets"),
+                        feat_frame_spans   = batch.get("feat_frame_spans"),
+                    )
+
                 dv["total"].append(out.loss.item())
                 dv["asr"].append(out.loss_asr.item()   if out.loss_asr  else 0.0)
                 dv["ctc"].append(out.loss_ctc.item()   if out.loss_ctc  else 0.0)
@@ -360,28 +447,30 @@ def train(args) -> None:
 
         mean_dv = {k: float(np.mean(v)) for k, v in dv.items()}
 
+        dev_wer = evaluate_wer(model, dev_loader, processor, device, num_batches=20)
+
         print(
             f"Epoch {epoch:>2} summary | "
             f"train  total={mean_tr['total']:.4f}  asr={mean_tr['asr']:.4f}  ctc={mean_tr['ctc']:.4f}  feat={mean_tr['feat']:.4f} | "
-            f"dev    total={mean_dv['total']:.4f}  asr={mean_dv['asr']:.4f}  ctc={mean_dv['ctc']:.4f}  feat={mean_dv['feat']:.4f}"
+            f"dev    total={mean_dv['total']:.4f}  asr={mean_dv['asr']:.4f}  ctc={mean_dv['ctc']:.4f}  feat={mean_dv['feat']:.4f}  wer={dev_wer:.4f}"
         )
 
-        history.append({"epoch": epoch, "train": mean_tr, "dev": mean_dv})
-
+        history.append({"epoch": epoch, "train": mean_tr, "dev": mean_dv, "dev_wer": dev_wer})
         if use_wandb:
             import wandb
             wandb.log({"epoch": epoch,
                        **{f"train/{k}": v for k, v in mean_tr.items()},
-                       **{f"dev/{k}":   v for k, v in mean_dv.items()}})
+                       **{f"dev/{k}":   v for k, v in mean_dv.items()},
+                       **{f"dev/wer": dev_wer}})
 
-        if mean_dv["total"] < best_dev_loss:
-            best_dev_loss = mean_dv["total"]
+        if dev_wer < best_wer:
+            best_wer = dev_wer
             ckpt = out_dir / "best"
             model.whisper.save_pretrained(str(ckpt))
             processor.save_pretrained(str(ckpt))
             torch.save(model.ctc_head.state_dict(),  out_dir / "best_ctc_head.pt")
             torch.save(model.feat_head.state_dict(), out_dir / "best_feat_head.pt")
-            print(f"  ✓ Checkpoint (dev={best_dev_loss:.4f}) → {ckpt}")
+            print(f"  ✓ Checkpoint (dev={best_wer:.4f}) → {ckpt}")
 
     hist_path = out_dir / "history.json"
     hist_path.write_text(
@@ -404,8 +493,12 @@ def main():
     p.add_argument("--run_name",    default="ctc_only")
     p.add_argument("--data_root",   default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--output_dir",  default="models/aux_ctc")
-    p.add_argument("--lambda_ctc",  type=float, default=0.1)
-    p.add_argument("--lambda_feat", type=float, default=0.0)
+    p.add_argument("--ctc_layer",   type=int,   default=8)
+    p.add_argument("--lambda_ctc",  type=float, default=0.3)
+    p.add_argument("--feat_layer",  type=int,   default=12)
+    p.add_argument("--lambda_feat", type=float, default=0.1)
+    p.add_argument("--held_out_l1", default=None,
+               help="L1 group to exclude from training (e.g. 'Chinese')")
     p.add_argument("--epochs",      type=int,   default=5)
     p.add_argument("--batch_size",  type=int,   default=16)
     p.add_argument("--lr",          type=float, default=1e-4)

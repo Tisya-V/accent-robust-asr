@@ -111,7 +111,12 @@ def transcribe(
             pred_ids = model.generate(
                 inputs.input_features.to(device),
                 attention_mask=inputs.attention_mask.to(device),
-                language="en", task="transcribe",
+                language="en", 
+                task="transcribe",
+                # no_repeat_ngram_size=3,
+                # repetition_penalty=1.1,
+                temperature=0.0,
+                
             )
         predictions.extend(processor.batch_decode(pred_ids, skip_special_tokens=True))
     return predictions
@@ -163,8 +168,6 @@ def run_one(
     print(f"  Loading model [{model_key}] ...")
     model, processor = registry[model_key]["loader"]()
     model.eval()
-    model.generation_config.suppress_tokens       = None
-    model.generation_config.begin_suppress_tokens = None
 
     print(f"  Transcribing {len(utterances):,} utterances [{split}] ...")
     preds   = transcribe(utterances, processor, model, device)

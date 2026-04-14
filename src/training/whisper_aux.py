@@ -2,10 +2,6 @@
 src/training/whisper_aux.py
 WhisperWithAuxHeads — wraps WhisperForConditionalGeneration and injects
 auxiliary supervision into the encoder at two configurable layer taps:
-
-    CTC_LAYER  (default 4) → CTCPhonemeHead   (mid-encoder phoneme alignment)
-    FEAT_LAYER (default 12) → PhonFeatureHead  (top encoder articulatory features)
-
 The main ASR cross-entropy loss is unchanged.
 Set lambda_ctc=0 or lambda_feat=0 to disable the respective head.
 """
@@ -22,8 +18,8 @@ from transformers import WhisperForConditionalGeneration
 
 from src.training.aux_heads import CTCPhonemeHead, PhonFeatureHead
 
-CTC_LAYER  = 4    # after 5th transformer block — mid-encoder phoneme signal
-FEAT_LAYER = 12   # after 12th transformer block — top encoder (whisper-small)
+CTC_LAYER  = 7    # after 8th transformer block — mid-encoder phoneme signal
+FEAT_LAYER = 11   # after 12th transformer block — top encoder (whisper-small)
 
 
 @dataclass
@@ -81,20 +77,14 @@ class WhisperWithAuxHeads(nn.Module):
     def _register_hooks(self) -> None:
         layers = self.whisper.model.encoder.layers
 
-        def _hook_detach(store: str):
-            def _fn(module, inp, out):
-                hs = out[0] if isinstance(out, tuple) else out
-                setattr(self, store, hs.detach())   # CTC: detached
-            return _fn
-
         def _hook_live(store: str):
             def _fn(module, inp, out):
                 hs = out[0] if isinstance(out, tuple) else out
-                setattr(self, store, hs)            # Feat: live grad
+                setattr(self, store, hs)
             return _fn
 
         if self.lambda_ctc > 0:
-            layers[self.ctc_layer].register_forward_hook(_hook_detach("_ctc_hidden"))
+            layers[self.ctc_layer].register_forward_hook(_hook_live("_ctc_hidden"))
 
         if self.lambda_feat > 0 and self.feat_layer != self.ctc_layer:
             layers[self.feat_layer].register_forward_hook(_hook_live("_feat_hidden"))
@@ -151,6 +141,9 @@ class WhisperWithAuxHeads(nn.Module):
                 target_lengths = ctc_target_lengths,
             )
 
+        if self.lambda_feat > 0 and self._feat_hidden is None:
+            self._feat_hidden = self._ctc_hidden # if feat_layer == ctc_layer, reuse the same hidden states
+
         # Feature head — pool segments on-the-fly from feat hidden states
         if (self.lambda_feat > 0
                 and self._feat_hidden is not None
@@ -158,17 +151,20 @@ class WhisperWithAuxHeads(nn.Module):
                 and feat_targets is not None):
             hs = self._feat_hidden                 # (B, T, D)
             pooled = []
+            valid_count = 0
             for b_idx, spans in enumerate(feat_frame_spans):
                 for s, e in spans:
                     e = min(e, hs.shape[1])
                     if e > s:
                         pooled.append(hs[b_idx, s:e].mean(0))
+                        valid_count += 1
+
             if pooled:
-                seg_embs = torch.stack(pooled)     # (N, D)
-                _, loss_feat = self.feat_head(seg_embs, feat_targets)
+                seg_embs = torch.stack(pooled)
+                _, loss_feat = self.feat_head(seg_embs, feat_targets[:valid_count])
 
         total = loss_asr
-        if loss_ctc  is not None: total = total + self.lambda_ctc  * loss_ctc
+        if loss_ctc is not None:  total = total + self.lambda_ctc * loss_ctc
         if loss_feat is not None: total = total + self.lambda_feat * loss_feat
 
         return AuxLossOutput(
@@ -190,3 +186,6 @@ class WhisperWithAuxHeads(nn.Module):
     @torch.no_grad()
     def transcribe(self, input_features: torch.Tensor, **gen_kwargs) -> torch.Tensor:
         return self.whisper.generate(input_features, **gen_kwargs)
+    
+    def generate(self, *args, **kwargs):
+        return self.whisper.generate(*args, **kwargs)

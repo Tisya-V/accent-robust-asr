@@ -137,6 +137,7 @@ def load_train_dev_utterances(
     local_root:   str | Path = LOCAL_L2ARCTIC_DIR,
     dev_fraction: float      = 0.15,
     random_seed:  int        = RANDOM_SEED,
+    held_out_l1:  str | None   = None,
 ) -> tuple[List[Dict], List[Dict]]:
     """
     Utterances from the 18 non-held-out speakers split into train / dev
@@ -144,7 +145,12 @@ def load_train_dev_utterances(
 
     Returns (train_utts, dev_utts).
     """
-    utts = _load_raw_scripted(Path(local_root), TRAIN_SPEAKERS, split="train")
+
+    speakers = set(TRAIN_SPEAKERS)
+    if held_out_l1:
+        speakers = {spk for spk in TRAIN_SPEAKERS if SPEAKER_L1.get(spk) != held_out_l1}
+
+    utts = _load_raw_scripted(Path(local_root), speakers, split="train")
 
     train, dev = train_test_split(
         utts,
@@ -156,7 +162,8 @@ def load_train_dev_utterances(
         u["split"] = "dev"
 
     print(f"[load_train_dev_utterances]  train={len(train)}  dev={len(dev)}  "
-          f"(18 speakers, stratified by L1)")
+          f"held_out_l1={held_out_l1}")
+
     return list(train), list(dev)
 
 

@@ -43,9 +43,19 @@ def get_model_registry(device):
             "loader": lambda: load_baseline_lora(device=device)
         },
 
+        "baseline_lora_heldout_chinese": {
+            "label": "Naive LoRA FT [held-out Chinese]",      
+            "loader": lambda: load_baseline_lora(device=device, checkpoint_dir="models/baseline_loraft_heldout_chinese")
+        },
+
         "ctc_aux": {
             "label": "CTC Aux",      
             "loader": lambda: load_ctc_aux(device=device)
+        },
+
+        "no_aux": {
+            "label": "No Aux",
+            "loader": lambda: load_ctc_aux(device=device, checkpoint_dir="models/no_aux")
         },
     }
 
