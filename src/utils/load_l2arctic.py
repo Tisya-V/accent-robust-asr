@@ -35,6 +35,7 @@ from tqdm import tqdm
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Set
+import re
 
 from sklearn.model_selection import train_test_split
 
@@ -101,6 +102,128 @@ def _iter_speaker_scripted(spk_dir: Path, split: str) -> List[Dict]:
     )
 
 
+def _parse_cmu_txt_done_data(path: Path) -> Dict[str, str]:
+    """
+    Parse CMU ARCTIC etc/txt.done.data into:
+        {"arctic_a0001": "AUTHOR OF THE DANGER TRAIL, PHILIP STEELS, ETC", ...}
+
+    Expected line format:
+        ( arctic_a0001 "AUTHOR OF THE DANGER TRAIL, PHILIP STEELS, ETC" )
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"CMU ARCTIC transcript file not found: {path}")
+
+    mapping: Dict[str, str] = {}
+    pattern = re.compile(r'^\(\s*([^\s]+)\s+"(.*)"\s*\)\s*$')
+
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = pattern.match(line)
+        if not m:
+            print(f"[WARN] Could not parse txt.done.data line: {line}")
+            continue
+        utt_id, text = m.groups()
+        mapping[utt_id] = text
+
+    return mapping
+
+
+def _load_cmu_arctic_utterances(
+    cmu_root: str | Path,
+    speakers: Set[str] = frozenset({"bdl"}),
+    max_utts_per_speaker: int | None = None,
+) -> List[Dict]:
+    """
+    Load native-English CMU ARCTIC speakers into the same utterance schema
+    used by L2-ARCTIC loaders.
+
+    Expected layout:
+        <cmu_root>/
+            cmu_us_bdl_arctic/
+                wav/
+                    arctic_a0001.wav
+                etc/
+                    txt.done.data
+
+    Returns utterance dicts with:
+        utterance_id, speaker, l1, wav_path, textgrid, text, split, domain
+    """
+    cmu_root = Path(cmu_root)
+    utts: List[Dict] = []
+
+    for speaker in sorted(speakers):
+        spk_dir = cmu_root / f"cmu_us_{speaker}_arctic"
+        wav_dir = spk_dir / "wav"
+        txt_done = spk_dir / "etc" / "txt.done.data"
+
+        if not wav_dir.exists():
+            print(f"[WARN] CMU ARCTIC wav dir not found: {wav_dir}")
+            continue
+        if not txt_done.exists():
+            print(f"[WARN] CMU ARCTIC transcript file not found: {txt_done}")
+            continue
+
+        transcript_map = _parse_cmu_txt_done_data(txt_done)
+
+        spk_utts = []
+        for wav_path in sorted(wav_dir.glob("*.wav")):
+            stem = wav_path.stem
+            text = transcript_map.get(stem, "")
+            spk_utts.append({
+                "utterance_id": f"{speaker}_{stem}",
+                "speaker": speaker.upper(),
+                "l1": "English",
+                "wav_path": str(wav_path),
+                "textgrid": None,
+                "text": text,
+                "split": "test",
+                "domain": "scripted",
+            })
+
+        if max_utts_per_speaker and len(spk_utts) > max_utts_per_speaker:
+            step = max(1, len(spk_utts) // max_utts_per_speaker)
+            spk_utts = spk_utts[::step][:max_utts_per_speaker]
+
+        utts.extend(spk_utts)
+
+    print(f"[load_cmu_arctic_utterances] {len(utts)} utterances from {len(speakers)} speakers")
+    return utts
+
+def _load_edacc_utterances(
+    manifest_path: str | Path,
+    max_utts: int | None = None,
+) -> List[Dict]:
+    """
+    Load the pre-cut Jamaican EdAcc subset from a CSV manifest.
+    Expect columns:
+      utteranceid,speaker,l1,accent,text,wavpath,split,corpus,recording_id,start,end,duration,n_words
+    """
+    import pandas as pd
+
+    manifest_path = Path(manifest_path)
+    df = pd.read_csv(manifest_path)
+
+    if max_utts is not None:
+        df = df.head(max_utts).copy()
+
+    utts = []
+    for _, row in df.iterrows():
+        utts.append(
+            {
+                "utterance_id": str(row["utteranceid"]),
+                "speaker": str(row["speaker"]),
+                "l1": "Jamaican",
+                "wav_path": str(row["wavpath"]),
+                "textgrid": None,
+                "text": str(row.get("text", "")),
+                "split": "test",
+                "domain": "spontaneous",
+            }
+        )
+    return utts
+
 def _load_raw_scripted(
     local_root: Path,
     speakers:   Set[str],
@@ -123,15 +246,48 @@ def _load_raw_scripted(
 def load_test_utterances(
     local_root: str | Path = LOCAL_L2ARCTIC_DIR,
     split: str = "scripted",
+    include_cmu_native: bool = True,
+    cmu_root: str | Path | None = "data",
+    cmu_speakers: Set[str] = frozenset({"bdl"}),
+    max_cmu_utts_per_speaker: int | None = None,
+    include_edacc_jamaican: bool = True,
+    edacc_manifest_path: str | Path | None  = "data/edacc_jamaican_subset/jamaican_subset_all.csv",
+    max_edacc_utts: int | None = None,
 ) -> List[Dict]:
     if split == "spontaneous":
-        return load_suitcase_corpus(local_root)
+        utts =  load_suitcase_corpus(local_root)
+    
+        if include_edacc_jamaican:
+            if edacc_manifest_path is None:
+                raise ValueError("include_edacc_jamaican=True but edacc_manifest_path was not provided")
+            utts.extend(
+                _load_edacc_utterances(
+                    manifest_path=edacc_manifest_path,
+                    max_utts=max_edacc_utts,
+                )
+            )
+
+        return utts
+
     utts = _load_raw_scripted(Path(local_root), TEST_SPEAKERS, "test")
+
+    if include_cmu_native:
+        if cmu_root is None:
+            raise ValueError("include_cmu_native=True but cmu_root was not provided")
+        utts.extend(
+            _load_cmu_arctic_utterances(
+                cmu_root=cmu_root,
+                speakers=cmu_speakers,
+                max_utts_per_speaker=max_cmu_utts_per_speaker,
+            )
+        )
+
+
     for u in utts:
         u["split"] = "test"
-    print(f"[load_test_utterances]  {len(utts)} utterances from {len(TEST_SPEAKERS)} speakers")
-    return utts
 
+    print(f"[load_test_utterances] {len(utts)} utterances total")
+    return utts
 
 def load_train_dev_utterances(
     local_root:   str | Path = LOCAL_L2ARCTIC_DIR,
@@ -280,17 +436,26 @@ def load_probe_utterances(
 
 
 if __name__ == "__main__":
-    # Load utterances
-    # print columns and first few rows for sanity check
-    train, test = load_train_dev_utterances()
+    # # Load utterances
+    # # print columns and first few rows for sanity check
+    # train, dev = load_train_dev_utterances()
     import pandas as pd
-    df = pd.DataFrame(train)
-    print("Columns:", df.columns.tolist())
-    print(df[["speaker", "l1", "text"]].head())
+    # df = pd.DataFrame(train)
+    # print("Columns:", df.columns.tolist())
+    # print(df[["speaker", "l1", "text"]].head())
 
-    # Load suitcase corpus (OOD)
-    sc_utts = load_suitcase_corpus()
-    sc_df = pd.DataFrame(sc_utts)
-    print("\nSuitcase corpus (OOD) columns:", sc_df.columns.tolist())
-    print(sc_df[["speaker", "l1", "text"]].head())
+
+    # Load test utterances
+    import numpy as np
+    test = load_test_utterances(max_cmu_utts_per_speaker=10, split="spontaneous")
+    test_df = pd.DataFrame(test)
+    test_df = test_df[test_df["l1"] == "Jamaican" ]
+    print(test_df.head(15))
+
+    # # Load suitcase corpus (OOD)
+    # sc_utts = load_suitcase_corpus()
+    # sc_df = pd.DataFrame(sc_utts)
+    # print("\nSuitcase corpus (OOD) columns:", sc_df.columns.tolist())
+    # print(sc_df[["speaker", "l1", "text"]].head())
+
     

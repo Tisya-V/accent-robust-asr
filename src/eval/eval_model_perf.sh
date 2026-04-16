@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_model_perf_no_aux
+#SBATCH --job-name=eval_model_perf_all
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -20,6 +20,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.eval_model_perf --models "no_aux"
+python -u -m src.eval.eval_model_perf --models "baseline no_aux ctc_aux_l3 ctc_aux_l7 feat_aux feat_aux0p3"
 
 echo "Evaluation completed."

@@ -21,7 +21,7 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-for MODEL in "baseline" "baseline_lora" "ctc_aux"; do
+for MODEL in "no_aux" "ctc_aux_l3" "ctc_aux_l7" "feat_aux" "feat_aux0p3"; do
     echo -e "\n\nEvaluating model: $MODEL\n"
     python -u -m src.eval.probing.probe_accent --models $MODEL --within_phoneme
 done

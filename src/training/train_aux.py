@@ -407,6 +407,7 @@ def train(args) -> None:
                 total = f"{tr['total'][-1]:.3f}",
                 asr   = f"{tr['asr'][-1]:.3f}",
                 ctc   = f"{tr['ctc'][-1]:.3f}",
+                feat  = f"{tr['feat'][-1]:.3f}",
             )
 
         mean_tr = {k: float(np.mean(v)) for k, v in tr.items()}
@@ -443,6 +444,7 @@ def train(args) -> None:
                     total = f"{np.mean(dv['total']):.3f}",
                     asr   = f"{np.mean(dv['asr']):.3f}",
                     ctc   = f"{np.mean(dv['ctc']):.3f}",
+                    feat  = f"{np.mean(dv['feat']):.3f}",
                 )
 
         mean_dv = {k: float(np.mean(v)) for k, v in dv.items()}

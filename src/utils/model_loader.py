@@ -8,7 +8,7 @@ Usage:
 
     model, processor = load_baseline()
     model, processor = load_baseline_lora()
-    model, processor = load_ctc_aux()        # merged LoRA, no aux heads
+    model, processor = load_aux_model()        # merged LoRA, no aux heads
     model, processor = load_ctc_aux_full()   # WhisperWithAuxHeads (with heads intact)
 """
 
@@ -24,7 +24,10 @@ from src.training.whisper_aux import WhisperWithAuxHeads
 
 BASE_MODEL_ID   = "openai/whisper-small"
 BASELINE_LORA   = "models/baseline_loraft"
-CTC_AUX_DIR     = "models/ctc_aux"
+CTC_AUX_DIR  = "models/ctc_aux"
+FEAT_AUX_DIR = "models/feat_aux"
+BOTH_AUX_DIR = "models/both_aux"
+NO_AUX_DIR   = "models/no_aux"
 
 
 def _processor(model_id: str = BASE_MODEL_ID) -> WhisperProcessor:
@@ -38,24 +41,44 @@ def get_model_registry(device):
             "loader": lambda: load_baseline(device=device)
         },
 
-        "baseline_lora": {
-            "label": "Naive LoRA FT",      
-            "loader": lambda: load_baseline_lora(device=device)
+        "no_aux": {
+            "label": "No Aux",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir=NO_AUX_DIR)
         },
-
-        "baseline_lora_heldout_chinese": {
-            "label": "Naive LoRA FT [held-out Chinese]",      
-            "loader": lambda: load_baseline_lora(device=device, checkpoint_dir="models/baseline_loraft_heldout_chinese")
+        "no_aux_heldout_chinese": {
+            "label": "No Aux (Held-out Chinese)",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/no_aux_heldout_chinese")
         },
 
         "ctc_aux": {
             "label": "CTC Aux",      
-            "loader": lambda: load_ctc_aux(device=device)
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir=CTC_AUX_DIR)
+        },
+        "ctc_aux_l3": {
+            "label": "CTC Aux",      
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/ctc_aux_l3")
+        },
+        "ctc_aux_l7": {
+            "label": "CTC Aux",      
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/ctc_aux_l7")
         },
 
-        "no_aux": {
-            "label": "No Aux",
-            "loader": lambda: load_ctc_aux(device=device, checkpoint_dir="models/no_aux")
+        "feat_aux": {
+            "label": "Feature Aux",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir=FEAT_AUX_DIR)
+        },
+
+        "feat_aux0p2": {
+            "label": "Feature Aux",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/feat_aux0p2")
+        },
+        "feat_aux_heldout_chinese": {
+            "label": "Feature Aux (Held-out Chinese)",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/feat_aux_heldout_chinese")
+        },
+        "feat_aux0p3": {
+            "label": "Feature Aux",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/feat_aux0p3")
         },
     }
 
@@ -120,7 +143,7 @@ def load_baseline_lora(
 # CTC Aux — whisper-small + LoRA fine-tuned with CTC phoneme auxiliary loss
 # ---------------------------------------------------------------------------
 
-def load_ctc_aux(
+def load_aux_model(
     checkpoint_dir: str = CTC_AUX_DIR,
     device: str | None = None,
 ) -> Tuple[WhisperForConditionalGeneration, WhisperProcessor]:
@@ -230,7 +253,7 @@ def load_all_for_probing(
         print(f"[WARN] {BASELINE_LORA} not found, skipping")
 
     if (Path(CTC_AUX_DIR) / "best").exists():
-        out["ctc_aux"] = load_ctc_aux(device=device)
+        out["ctc_aux"] = load_aux_model(device=device)
     else:
         print(f"[WARN] {CTC_AUX_DIR}/best not found, skipping")
 

@@ -23,6 +23,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 import torch
+import pickle
 from tqdm import tqdm
 
 from src.config import (
@@ -32,6 +33,7 @@ from src.config import (
 )
 from src.utils.textgrid import parse_textgrid
 
+CACHE = Path("results/embedding_cache")
 
 # ---------------------------------------------------------------------------
 # Whisper hidden-state extraction
@@ -102,6 +104,17 @@ class EmbeddingRecord:
     utterance_id: str
     split:        str         # "train" | "dev" | "test" | "ood"
 
+def get_or_build_embeddings(model_key, model, processor, utterances, layer_indices, device):
+    cache_path = CACHE / f"{model_key}_embeddings.pkl"
+    if cache_path.exists():
+        print(f"  Loading cached embeddings from {cache_path}")
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+    records = build_embedding_dataset(model, processor, utterances, layer_indices, device=device)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(records, f)
+    return records
 
 def build_embedding_dataset(
     model,

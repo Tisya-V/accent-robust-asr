@@ -31,7 +31,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from src.config import LOCAL_L2ARCTIC_DIR, NUM_L1S, WHISPER_N_ENCODER_LAYERS
 from src.eval.probing.probe_utils import (
-    build_embedding_dataset,
+    get_or_build_embeddings,
     records_to_arrays,
     save_results,
 )
@@ -129,9 +129,13 @@ def probe_model(
         return
 
     print("  Extracting hidden states ...")
-    records = build_embedding_dataset(
-        model=model, processor=processor,
-        utterances=utterances, layer_indices=layer_indices, device=device,
+    records = get_or_build_embeddings(
+        model_key=model_key,
+        model=model,
+        processor=processor,
+        utterances=utterances,
+        layer_indices=layer_indices,
+        device=device
     )
     print(f"  {len(records):,} records extracted")
 

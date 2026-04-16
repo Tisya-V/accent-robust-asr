@@ -12,6 +12,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.utils.phonology import NUM_PHONES, NUM_PHON_FEATURES
 
@@ -71,13 +72,16 @@ class PhonFeatureHead(nn.Module):
         )
         self.bce_loss = nn.BCEWithLogitsLoss(reduction="mean")
 
-    def forward(
-        self,
-        segment_embeddings: torch.Tensor,
-        targets:            Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        logits = self.head(segment_embeddings)          # (N, NUM_PHON_FEATURES)
+    def forward(self, segment_embeddings, targets=None):
+        logits = self.head(segment_embeddings)
         if targets is None:
             return logits.sigmoid(), None
-        loss = self.bce_loss(logits, targets.float())
+        
+        targets_binary = targets.clone()
+        mask = targets != 0   # mask out neutral features
+        targets_binary = ((targets_binary + 1) / 2) # map to {0, 1}
+        
+        loss = F.binary_cross_entropy_with_logits(
+            logits[mask], targets_binary[mask].float()
+        )
         return logits.sigmoid(), loss

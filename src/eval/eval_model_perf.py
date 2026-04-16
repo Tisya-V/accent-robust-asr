@@ -28,6 +28,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import torch
 from jiwer import wer as jiwer_wer
 from tqdm import tqdm
@@ -101,8 +102,15 @@ def transcribe(
             audio, sr = sf.read(utt["wav_path"], dtype="float32", always_2d=False)
             if sr != 16000:
                 audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
-            audios.append(audio)
+            
+            if utt.get("domain") == "spontaneous":
+                predictions.append(transcribe_long(audio, processor, model, device)) #reroute
+                continue
+            else:
+                audios.append(audio)  # handle scripted as before in batches
 
+        if not audios:
+            continue
         inputs = processor(
             audios, sampling_rate=16000,
             return_tensors="pt", truncation=True, return_attention_mask=True,
@@ -121,6 +129,37 @@ def transcribe(
         predictions.extend(processor.batch_decode(pred_ids, skip_special_tokens=True))
     return predictions
 
+def transcribe_long(audio, processor, model, device, chunk_s=28):
+    # note that this has hard cutoffs
+    # so may split words and stuff
+    # but this would be like max 4-8 words in a very long 1/2 min utterance
+    # so mostly hidden but worth noting
+    sr       = 16000
+    chunk_len = chunk_s * sr
+
+    if len(audio) <= chunk_len:
+        inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
+        with torch.no_grad():
+            ids = model.generate(
+                inputs.input_features.to(device),
+                language="en", task="transcribe", temperature=0.0,
+            )
+        return processor.decode(ids[0], skip_special_tokens=True).strip()
+
+    parts = []
+    for start in range(0, len(audio), chunk_len):
+        chunk = audio[start : start + chunk_len]
+        if len(chunk) < sr:  # skip sub-1s tail
+            break
+        inputs = processor(chunk, sampling_rate=sr, return_tensors="pt")
+        with torch.no_grad():
+            ids = model.generate(
+                inputs.input_features.to(device),
+                language="en", task="transcribe", temperature=0.0,
+            )
+        parts.append(processor.decode(ids[0], skip_special_tokens=True).strip())
+
+    return " ".join(parts)
 
 # ---------------------------------------------------------------------------
 # Results assembly

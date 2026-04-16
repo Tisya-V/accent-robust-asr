@@ -4,7 +4,7 @@ Linear probing for phoneme identity from Whisper encoder layers.
 
 Usage:
     python probe_phoneme.py --models baseline --split scripted
-    python probe_phoneme.py --models baseline,baseline_lora,ctc_aux --split scripted
+    python probe_phoneme.py --models baseline,no_aux,ctc_aux,feat_aux --split scripted
 
 Output: results/phoneme_probe/phoneme_probe_{model_key}_{split}.json
 """
@@ -16,14 +16,14 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
 from src.config import LOCAL_L2ARCTIC_DIR, WHISPER_N_ENCODER_LAYERS
 from src.eval.probing.probe_utils import (
-    build_embedding_dataset,
+    get_or_build_embeddings,
     records_to_arrays,
     save_results,
 )
@@ -31,20 +31,20 @@ from src.utils.load_l2arctic import load_probe_utterances
 from src.utils.model_loader import get_model_registry
 from src.utils.phonology import ARPABET_VOCAB, NUM_PHONES
 
+MAX_PROBE_SAMPLES = 10000
 
 # ---------------------------------------------------------------------------
 # Probe helper
 # ---------------------------------------------------------------------------
 
-
 def run_phoneme_probe(
-    X:        np.ndarray,
-    y:        np.ndarray,
-    groups:   np.ndarray,
+    X:         np.ndarray,
+    y:         np.ndarray,
+    groups:    np.ndarray,
     layer_idx: int,
-    n_folds:  int = 5,
+    n_folds:   int = 5,
 ) -> dict:
-    """Speaker-grouped k-fold logistic regression probe for phoneme identity."""
+    """Speaker-grouped k-fold multinomial logistic regression probe for phoneme identity."""
     actual_folds = min(n_folds, len(np.unique(groups)))
     if actual_folds < 2:
         return {"accuracy": float("nan"), "macro_f1": float("nan"),
@@ -53,7 +53,13 @@ def run_phoneme_probe(
     all_preds, all_true = [], []
     for tr, te in GroupKFold(n_splits=actual_folds).split(X, y, groups):
         scaler = StandardScaler()
-        clf    = SGDClassifier(max_iter=300, loss="log_loss", random_state=42)
+        clf = LogisticRegression(
+            solver="saga",
+            max_iter=1000,
+            tol=1e-3,
+            C=1.0,
+            random_state=42,
+        )
         clf.fit(scaler.fit_transform(X[tr]), y[tr])
         all_preds.extend(clf.predict(scaler.transform(X[te])).tolist())
         all_true.extend(y[te].tolist())
@@ -81,7 +87,6 @@ def run_phoneme_probe(
 # Per-model runner
 # ---------------------------------------------------------------------------
 
-
 def probe_model(
     model_key:     str,
     model,
@@ -98,12 +103,15 @@ def probe_model(
         print(f"  [skip] {out_path} already exists — delete to re-run")
         return
 
-    print("  Extracting hidden states ...")
-    records = build_embedding_dataset(
-        model=model, processor=processor,
-        utterances=utterances, layer_indices=layer_indices, device=device,
+    records = get_or_build_embeddings(
+        model_key=model_key,
+        model=model,
+        processor=processor,
+        utterances=utterances,
+        layer_indices=layer_indices,
+        device=device,
     )
-    print(f"  {len(records):,} records extracted")
+    print(f"  {len(records):,} records")
 
     layer_results = {}
     for layer_idx in layer_indices:
@@ -112,6 +120,20 @@ def probe_model(
 
         valid = phone_ids >= 0
         X, phone_ids, speakers = X[valid], phone_ids[valid], speakers[valid]
+
+        if len(X) > MAX_PROBE_SAMPLES:
+            print(f"  Layer {layer_idx:2d} | downsampling from {len(X):,} to {MAX_PROBE_SAMPLES} samples")
+            # stratify by speaker to preserve group structure
+            idx = []
+            unique_speakers = np.unique(speakers)
+            per_spk = MAX_PROBE_SAMPLES // len(unique_speakers)
+            rng = np.random.default_rng(42)
+            for spk in unique_speakers:
+                spk_idx = np.where(speakers == spk)[0]
+                chosen = rng.choice(spk_idx, min(per_spk, len(spk_idx)), replace=False)
+                idx.extend(chosen)
+            idx = np.array(idx)
+            X, phone_ids, speakers = X[idx], phone_ids[idx], speakers[idx]
 
         if len(X) < 50:
             print(f"  Layer {layer_idx:2d} | skipped (too few samples: {len(X)})")
@@ -122,9 +144,8 @@ def probe_model(
         )
 
     save_results(layer_results, str(out_path))
-    print(f"  Saved → {out_path}")
 
-    print(f"{'Layer':>6}  {'Accuracy':>10}  {'MacroF1':>10}")
+    print(f"\n{'Layer':>6}  {'Accuracy':>10}  {'MacroF1':>10}")
     for li in layer_indices:
         r = layer_results.get(str(li))
         if r:
@@ -135,22 +156,23 @@ def probe_model(
 # Main
 # ---------------------------------------------------------------------------
 
-
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     p = argparse.ArgumentParser(description="Phoneme linear probe on Whisper encoder")
     p.add_argument("--data_root",            default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",               default="baseline",
-                   help="Comma-separated model keys from MODEL_REGISTRY")
+                   help="Comma-separated model keys from get_model_registry")
     p.add_argument("--output_dir",           default="results/phoneme_probe")
     p.add_argument("--layers",               default=None,
                    help="Comma-separated layer indices (default: all)")
     p.add_argument("--max_utts_per_speaker", type=int, default=100)
     p.add_argument("--n_folds",              type=int, default=5)
+    p.add_argument("--split",                default="scripted",
+                   choices=["scripted", "spontaneous", "all"])
     args = p.parse_args()
 
-    print(f"=== Phoneme Probe  device={device} ===")
+    print(f"=== Phoneme Probe  device={device}  split={args.split} ===")
 
     registry      = get_model_registry(device)
     model_keys    = [k.strip() for k in args.models.split(",")]
@@ -166,7 +188,7 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"\nLoading utterances...")
+    print(f"\nLoading utterances ...")
     utterances = load_probe_utterances(
         local_root           = args.data_root,
         max_utts_per_speaker = args.max_utts_per_speaker,
@@ -185,7 +207,7 @@ def main():
             n_folds       = args.n_folds,
             device        = device,
             output_dir    = args.output_dir,
-            split         = "scripted",
+            split         = args.split,
         )
         del model
         torch.cuda.empty_cache()
