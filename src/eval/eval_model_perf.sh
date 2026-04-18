@@ -20,6 +20,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.eval_model_perf --models "baseline no_aux ctc_aux_l3 ctc_aux_l7 feat_aux feat_aux0p3"
+python -u -m src.eval.eval_model_perf --models "baseline, no_aux, ctc_aux_l3, ctc_aux_l7, feat_aux, feat_aux0p3"
 
 echo "Evaluation completed."

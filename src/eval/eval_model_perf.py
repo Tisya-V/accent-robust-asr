@@ -138,10 +138,11 @@ def transcribe_long(audio, processor, model, device, chunk_s=28):
     chunk_len = chunk_s * sr
 
     if len(audio) <= chunk_len:
-        inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
+        inputs = processor(audio, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
         with torch.no_grad():
             ids = model.generate(
                 inputs.input_features.to(device),
+                attention_mask=inputs.attention_mask.to(device),
                 language="en", task="transcribe", temperature=0.0,
             )
         return processor.decode(ids[0], skip_special_tokens=True).strip()
@@ -151,10 +152,11 @@ def transcribe_long(audio, processor, model, device, chunk_s=28):
         chunk = audio[start : start + chunk_len]
         if len(chunk) < sr:  # skip sub-1s tail
             break
-        inputs = processor(chunk, sampling_rate=sr, return_tensors="pt")
+        inputs = processor(chunk, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
         with torch.no_grad():
             ids = model.generate(
                 inputs.input_features.to(device),
+                attention_mask=inputs.attention_mask.to(device),
                 language="en", task="transcribe", temperature=0.0,
             )
         parts.append(processor.decode(ids[0], skip_special_tokens=True).strip())

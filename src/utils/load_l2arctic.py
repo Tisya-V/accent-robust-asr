@@ -193,6 +193,7 @@ def _load_cmu_arctic_utterances(
 
 def _load_edacc_utterances(
     manifest_path: str | Path,
+    l1: str | None = None,
     max_utts: int | None = None,
 ) -> List[Dict]:
     """
@@ -214,7 +215,7 @@ def _load_edacc_utterances(
             {
                 "utterance_id": str(row["utteranceid"]),
                 "speaker": str(row["speaker"]),
-                "l1": "Jamaican",
+                "l1": l1,
                 "wav_path": str(row["wavpath"]),
                 "textgrid": None,
                 "text": str(row.get("text", "")),
@@ -250,19 +251,24 @@ def load_test_utterances(
     cmu_root: str | Path | None = "data",
     cmu_speakers: Set[str] = frozenset({"bdl"}),
     max_cmu_utts_per_speaker: int | None = None,
-    include_edacc_jamaican: bool = True,
-    edacc_manifest_path: str | Path | None  = "data/edacc_jamaican_subset/jamaican_subset_all.csv",
+    include_edacc: bool = True,
     max_edacc_utts: int | None = None,
 ) -> List[Dict]:
     if split == "spontaneous":
         utts =  load_suitcase_corpus(local_root)
     
-        if include_edacc_jamaican:
-            if edacc_manifest_path is None:
-                raise ValueError("include_edacc_jamaican=True but edacc_manifest_path was not provided")
+        if include_edacc:
             utts.extend(
                 _load_edacc_utterances(
-                    manifest_path=edacc_manifest_path,
+                    manifest_path="data/edacc_jamaican_subset/jamaican_subset_all.csv",
+                    l1="Jamaican",
+                    max_utts=max_edacc_utts,
+                )
+            )
+            utts.extend(
+                _load_edacc_utterances(
+                    manifest_path="data/edacc_english_subset/english_subset_all.csv",
+                    l1="English",
                     max_utts=max_edacc_utts,
                 )
             )
