@@ -17,6 +17,7 @@ WHISPER_N_ENCODER_LAYERS = 12     # whisper-small
 # Dataset
 LOCAL_L2ARCTIC_DIR = Path("data/l2_arctic")
 SUITCASE_SUBDIR = "suitcase_corpus"
+SPONTANEOUS_SUBDIR = "spontaneous"
 
 
 # L2-ARCTIC speaker → L1 mapping (all 24 speakers)

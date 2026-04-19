@@ -265,11 +265,11 @@ def main():
         print(f"  {split}: {len(utts):,} utterances")
 
     for key in model_keys:
-        print(f"\\n[Model: {key}]")
+        print(f"\n[Model: {key}]")
         for split, utterances in datasets.items():
             run_one(key, split, utterances, registry, device, args.output_dir)
 
-    print("\\nAll done.")
+    print("\nAll done.")
 
 
 if __name__ == "__main__":

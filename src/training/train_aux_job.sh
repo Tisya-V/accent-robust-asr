@@ -15,7 +15,7 @@ export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
 
 source activate
 
-source /vol/cuda/12.0.0/setup.sh
+source /vol/cuda/12.4.0/setup.sh
 
 cd /vol/bitbucket/$USER/accent-robust-asr/
 

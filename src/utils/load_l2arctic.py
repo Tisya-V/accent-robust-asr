@@ -42,6 +42,7 @@ from sklearn.model_selection import train_test_split
 from src.config import (
     LOCAL_L2ARCTIC_DIR,
     SPEAKER_L1,
+    SPONTANEOUS_SUBDIR,
     TEST_SPEAKERS,
     TRAIN_SPEAKERS,
     RANDOM_SEED,
@@ -255,7 +256,7 @@ def load_test_utterances(
     max_edacc_utts: int | None = None,
 ) -> List[Dict]:
     if split == "spontaneous":
-        utts =  load_suitcase_corpus(local_root)
+        utts =  load_spontaneous(Path(local_root) / SPONTANEOUS_SUBDIR / "manifest.csv")
     
         if include_edacc:
             utts.extend(
@@ -399,6 +400,26 @@ def load_suitcase_corpus(
     print(f"[load_suitcase_corpus]  {len(utts)} utterances from {n_spk} speakers")
     return utts
 
+def load_spontaneous(path):
+    '''
+    Assumes preprocessed into chunks via src.utils.preprocess_l2arctic_spontaneous.py
+    '''
+    import pandas as pd
+    df = pd.read_csv(path)
+
+    return [
+        {
+            "utterance_id": r["utterance_id"],
+            "speaker": r["speaker"],
+            "l1": r["l1"],
+            "wav_path": r["wav_path"],
+            "textgrid": None,
+            "text": r["text"],
+            "split": "ood",
+            "domain": "spontaneous",
+        }
+        for _, r in df.iterrows()
+    ]
 
 # ---------------------------------------------------------------------------
 # Probe loader — scripted only; use load_suitcase_corpus() separately for OOD
