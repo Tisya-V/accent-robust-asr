@@ -15,7 +15,7 @@ from typing import List, Dict
 import shutil
 
 # Your L2-Arctic loader (adapt paths)
-from src.utils.load_l2arctic import load_test_utterances
+from src.utils.load_l2arctic import load_test_utterances, load_train_dev_utterances
 
 def ensure_mono_and_resample(waveform: torch.Tensor, sr: int = 16000) -> torch.Tensor:
     """Convert to mono 16kHz."""
@@ -29,78 +29,165 @@ def ensure_mono_and_resample(waveform: torch.Tensor, sr: int = 16000) -> torch.T
 def preprocess_l2arctic(
     raw_output_dir: str,
     processed_output_dir: str,
-    split: str = "scripted",
+    splits: list[str] = ["scripted"],
     whisper_model: str = "openai/whisper-small"
 ):
-    """Step 1: Create LibriSpeech-like raw structure → Step 2: Whisper encode."""
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    
-    # Stage 1: Create raw/ structure matching LibriSpeech
-    raw_test_dir = Path(raw_output_dir) / split
-    if not (raw_test_dir.exists() and any(raw_test_dir.iterdir())):
-        # Load L2-Arctic test utterances
-        print("Loading test set...")
+    for split in splits:
+        """Step 1: Create LibriSpeech-like raw structure → Step 2: Whisper encode."""
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {device}")
+        
+        # Stage 1: Create raw/ structure matching LibriSpeech
+        raw_out_dir_split = {
+            "train": Path(raw_output_dir) / "train" / split,
+            "dev": Path(raw_output_dir) / "dev" / split,
+            "test": Path(raw_output_dir) / "test" / split
+        }
+
         test_utts = load_test_utterances(split=split)
-        print(f"Loaded {len(test_utts)} test utterances")
+        train_utts, dev_utts = load_train_dev_utterances()
 
-        raw_test_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copy WAVs + create fake .trans.txt (LibriSpeech format)
-        transcripts = {}
-        for utt in tqdm(test_utts, desc="Copying WAVs"):
-            speaker = utt["speaker"]  
-            utt_id = f"{speaker}_{utt['utterance_id']}"  # e.g. "ABA_arctic_a0001"
-            wav_src = Path(utt["wav_path"])
-            wav_dst = raw_test_dir / f"{utt_id}.wav"
+
+        for train_split in ["train", "dev", "test"]:
+
+            if split == "spontaneous" and train_split != "test":
+                print(f"Skipping {train_split} split for spontaneous data.")
+                continue
+
+            raw_split_dir = raw_out_dir_split[train_split]
+            if not (raw_split_dir.exists() and any(raw_split_dir.iterdir())):
+                print(f"Creating raw directory for {train_split} split: {raw_split_dir}")
+                raw_split_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                print(f"Raw directory for {train_split} split already exists and is not empty: {raw_split_dir}, skipping creation.")
+                continue
+            utts = {"train": train_utts, "dev": dev_utts, "test": test_utts}[train_split]
             
-            # Copy WAV
-            shutil.copy2(wav_src, wav_dst)
-            
-            # Store transcript for .trans.txt
-            transcripts[utt_id] = utt["text"]
-    
-        # Write single .trans.txt (LibriSpeech format: "utt_id text")
-        with open(raw_test_dir / "data.trans.txt", "w") as f:
-            for utt_id, text in sorted(transcripts.items()):
-                f.write(f"{utt_id} {text}\n")
+            # Copy WAVs + create fake .trans.txt (LibriSpeech format)
+            transcripts = {}
+            for utt in tqdm(utts, desc="Copying WAVs"):
+                speaker = utt["speaker"]
+                utt_id = f"{speaker}_{utt['utterance_id']}"
+
+                speaker_dir = raw_split_dir / speaker
+                speaker_dir.mkdir(parents=True, exist_ok=True)
+
+                wav_dst = speaker_dir / f"{utt_id}.wav"
+                shutil.copy2(utt["wav_path"], wav_dst)
+
+                transcripts[utt_id] = utt["text"]
         
-        print(f"✅ Raw data: {raw_test_dir}")
-        print(f"Created {len(transcripts)} WAVs + data.trans.txt")
-    else:
-        print(f"Raw test directory already exists: {raw_test_dir}, skipping creation.")
-    
-    # Stage 2: Run Whisfusion preprocess_audio on our fake LibriSpeech
-    processed_dir = Path(processed_output_dir) / split
+            # Write single .trans.txt (LibriSpeech format: "utt_id text")
+            with open(raw_split_dir / "data.trans.txt", "w") as f:
+                for utt_id, text in sorted(transcripts.items()):
+                    f.write(f"{utt_id} {text}\n")
+            
+            print(f"✅ Raw data: {raw_split_dir}")
+            print(f"Created {len(transcripts)} WAVs + data.trans.txt")
+        
+            # Stage 2: Run Whisfusion preprocess_audio on our fake LibriSpeech
+            processed_dir = Path(processed_output_dir) / train_split / split
 
-    if processed_dir.exists() and any(processed_dir.iterdir()):
-        print(f"Processed directory already exists and is not empty: {processed_dir}, skipping preprocessing.")
-        print(f"Run eval with: --data_path {raw_test_dir} or delete {processed_dir} to re-run preprocessing.")
-        return
+            if processed_dir.exists() and any(processed_dir.iterdir()):
+                print(f"Processed directory already exists and is not empty: {processed_dir}, skipping preprocessing.")
+                continue
 
-    processed_dir.mkdir(parents=True, exist_ok=True)
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            
+            print(f"\nProcessing with Whisper encoder...")
+            
+            import subprocess
+            subprocess.run([
+                "python",
+                "-m",
+                "models.whisfusion.src.data.preprocess_audio",
+                "--source_dir", str(raw_split_dir),
+                "--output_dir", str(processed_dir),
+                "--model_name", whisper_model
+            ], check=True)
+            
+            print(f"\n✅ Processed .pt files: {processed_dir}")
+    # print(f"Run eval with: --data_path {raw_test_dir}")
+
+
+    # Test utts
+    # """Step 1: Create LibriSpeech-like raw structure → Step 2: Whisper encode."""
     
-    print(f"\nProcessing with Whisper encoder...")
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # print(f"Using device: {device}")
     
-    import subprocess
-    subprocess.run([
-        "python",
-        "-m",
-        "models.whisfusion.src.data.preprocess_audio",
-        "--source_dir", str(raw_test_dir),
-        "--output_dir", str(processed_dir),
-        "--model_name", whisper_model
-    ], check=True)
+    # # Stage 1: Create raw/ structure matching LibriSpeech
+    # raw_test_dir = Path(raw_output_dir) / "test" / split
+    # if not (raw_test_dir.exists() and any(raw_test_dir.iterdir())):
+    #     # Load L2-Arctic test utterances
+    #     print("Loading test set...")
+    #     test_utts = load_test_utterances(split=split)
+    #     print(f"Loaded {len(test_utts)} test utterances")
+
+    #     raw_test_dir.mkdir(parents=True, exist_ok=True)
+        
+    #     # Copy WAVs + create fake .trans.txt (LibriSpeech format)
+    #     transcripts = {}
+    #     for utt in tqdm(test_utts, desc="Copying WAVs"):
+    #         speaker = utt["speaker"]  
+    #         utt_id = f"{speaker}_{utt['utterance_id']}"  # e.g. "ABA_arctic_a0001"
+    #         wav_src = Path(utt["wav_path"])
+    #         wav_dst = raw_test_dir / f"{utt_id}.wav"
+            
+    #         # Copy WAV
+    #         shutil.copy2(wav_src, wav_dst)
+            
+    #         # Store transcript for .trans.txt
+    #         transcripts[utt_id] = utt["text"]
     
-    print(f"\n✅ Processed .pt files: {processed_dir}")
-    print(f"Run eval with: --data_path {raw_test_dir}")
+    #     # Write single .trans.txt (LibriSpeech format: "utt_id text")
+    #     with open(raw_test_dir / "data.trans.txt", "w") as f:
+    #         for utt_id, text in sorted(transcripts.items()):
+    #             f.write(f"{utt_id} {text}\n")
+        
+    #     print(f"✅ Raw data: {raw_test_dir}")
+    #     print(f"Created {len(transcripts)} WAVs + data.trans.txt")
+    # else:
+    #     print(f"Raw test directory already exists: {raw_test_dir}, skipping creation.")
+    
+    # # Stage 2: Run Whisfusion preprocess_audio on our fake LibriSpeech
+    # processed_dir = Path(processed_output_dir) / split
+
+    # if processed_dir.exists() and any(processed_dir.iterdir()):
+    #     print(f"Processed directory already exists and is not empty: {processed_dir}, skipping preprocessing.")
+    #     print(f"Run eval with: --data_path {raw_test_dir} or delete {processed_dir} to re-run preprocessing.")
+    #     return
+
+    # processed_dir.mkdir(parents=True, exist_ok=True)
+    
+    # print(f"\nProcessing with Whisper encoder...")
+    
+    # import subprocess
+    # subprocess.run([
+    #     "python",
+    #     "-m",
+    #     "models.whisfusion.src.data.preprocess_audio",
+    #     "--source_dir", str(raw_test_dir),
+    #     "--output_dir", str(processed_dir),
+    #     "--model_name", whisper_model
+    # ], check=True)
+    
+    # print(f"\n✅ Processed .pt files: {processed_dir}")
+    # print(f"Run eval with: --data_path {raw_test_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess L2-Arctic for Whisfusion")
     parser.add_argument("--raw_output_dir", type=str, default="data/raw", help="Whisfusion raw dir")
     parser.add_argument("--processed_output_dir", type=str, default="data/processed", help="Whisfusion processed dir")
-    parser.add_argument("--split", type=str, default="scripted", help="Split to process (scripted (default)/spontaneous)")
+    parser.add_argument(
+        "--split",
+        nargs="+",
+        default=["scripted"],
+        choices=["scripted", "spontaneous"],
+        help="One or more splits to process (default: scripted). Example: --split scripted spontaneous",
+    )
     parser.add_argument("--whisper_model", type=str, default="openai/whisper-small")
     
     args = parser.parse_args()

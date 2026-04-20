@@ -19,6 +19,8 @@ LOCAL_L2ARCTIC_DIR = Path("data/l2_arctic")
 SUITCASE_SUBDIR = "suitcase_corpus"
 SPONTANEOUS_SUBDIR = "spontaneous"
 
+MODELS_DIR = Path("models")
+
 
 # L2-ARCTIC speaker → L1 mapping (all 24 speakers)
 SPEAKER_L1 = {

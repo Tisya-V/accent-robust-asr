@@ -19,7 +19,7 @@ import torch
 import jiwer
 from tqdm import tqdm
 
-from src.config import LOCAL_L2ARCTIC_DIR, NLTK_DATA_PATH
+from src.config import LOCAL_L2ARCTIC_DIR, MODELS_DIR, NLTK_DATA_PATH
 from src.utils.load_l2arctic import load_test_utterances
 
 # --- NLTK / G2P setup ---
@@ -139,7 +139,7 @@ class WhisfusionWrapper:
 # ---------------------------------------------------------------------------
 # Load encoded features (for eval)
 # ---------------------------------------------------------------------------
-def build_pt_dataset(utterances, processed_root="data/processed", split="scripted"):
+def build_pt_dataset(utterances, processed_root="data/processed/test", split="scripted"):
     pt_root = Path(processed_root) / split
 
     id_to_pt = {
@@ -212,11 +212,20 @@ def main():
     parser.add_argument("--split", default="scripted", choices=["scripted", "spontaneous"])
     parser.add_argument("--output_dir", default="results/model_perf_comparison")
     parser.add_argument("--base_model_path", default="models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors")
-    parser.add_argument("--adapter_path", default="models/whisfusion/whisfusion_stage2_decoder.pt")
+    parser.add_argument("--model", default="whisfusion")
 
     args = parser.parse_args()
 
     print(f"Device: {device}")
+
+    adapter_path = f"{MODELS_DIR}/{args.model}/{args.model}_stage2_decoder.pt"
+    # check if eval files already exist
+    output_file = f"{args.model}_{args.split}_predictions.csv"
+    output_path = Path(args.output_dir) / output_file
+    if output_path.exists():
+        print(f"  [skip] {output_path} already exists — delete to re-run")
+        return
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # load data
     utterances = load_test_utterances(local_root=args.data_root, split=args.split)
@@ -227,7 +236,7 @@ def main():
     # load model
     model = WhisfusionWrapper(
         base_model_path=args.base_model_path,
-        adapter_path=args.adapter_path,
+        adapter_path=adapter_path,
         device=device
     )
 
@@ -235,9 +244,6 @@ def main():
     df = evaluate(dataset, model)
 
     # save
-    output_file = f"whisfusion_{args.split}_predictions.csv"
-    output_path = Path(args.output_dir) / output_file
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
 
     # metrics
