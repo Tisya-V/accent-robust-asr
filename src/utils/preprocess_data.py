@@ -9,12 +9,10 @@ import argparse
 import torch
 import torchaudio
 from pathlib import Path
-from transformers import WhisperProcessor, WhisperModel
 from tqdm import tqdm
-from typing import List, Dict
 import shutil
 
-# Your L2-Arctic loader (adapt paths)
+from src.config import SPEAKER_L1
 from src.utils.load_l2arctic import load_test_utterances, load_train_dev_utterances
 
 def ensure_mono_and_resample(waveform: torch.Tensor, sr: int = 16000) -> torch.Tensor:
@@ -30,7 +28,8 @@ def preprocess_l2arctic(
     raw_output_dir: str,
     processed_output_dir: str,
     splits: list[str] = ["scripted"],
-    whisper_model: str = "openai/whisper-small"
+    whisper_model: str = "openai/whisper-small",
+    held_out_l1: str = None
 ):
     
     for split in splits:
@@ -40,14 +39,15 @@ def preprocess_l2arctic(
         print(f"Using device: {device}")
         
         # Stage 1: Create raw/ structure matching LibriSpeech
-        raw_out_dir_split = {
-            "train": Path(raw_output_dir) / "train" / split,
-            "dev": Path(raw_output_dir) / "dev" / split,
-            "test": Path(raw_output_dir) / "test" / split
+        ho_suf = "" if held_out_l1 is None else f"heldout_{held_out_l1}"
+        train_split_dir = {
+            "train" : f"train_{ho_suf}",
+            "dev": f"dev_{ho_suf}",
+            "test": "test"
         }
 
         test_utts = load_test_utterances(split=split)
-        train_utts, dev_utts = load_train_dev_utterances()
+        train_utts, dev_utts = load_train_dev_utterances(held_out_l1=held_out_l1)
 
 
         for train_split in ["train", "dev", "test"]:
@@ -56,7 +56,7 @@ def preprocess_l2arctic(
                 print(f"Skipping {train_split} split for spontaneous data.")
                 continue
 
-            raw_split_dir = raw_out_dir_split[train_split]
+            raw_split_dir = Path(raw_output_dir) / train_split_dir[train_split] / split
             if not (raw_split_dir.exists() and any(raw_split_dir.iterdir())):
                 print(f"Creating raw directory for {train_split} split: {raw_split_dir}")
                 raw_split_dir.mkdir(parents=True, exist_ok=True)
@@ -67,6 +67,7 @@ def preprocess_l2arctic(
             
             # Copy WAVs + create fake .trans.txt (LibriSpeech format)
             transcripts = {}
+            
             for utt in tqdm(utts, desc="Copying WAVs"):
                 speaker = utt["speaker"]
                 utt_id = f"{speaker}_{utt['utterance_id']}"
@@ -88,7 +89,7 @@ def preprocess_l2arctic(
             print(f"Created {len(transcripts)} WAVs + data.trans.txt")
         
             # Stage 2: Run Whisfusion preprocess_audio on our fake LibriSpeech
-            processed_dir = Path(processed_output_dir) / train_split / split
+            processed_dir = Path(processed_output_dir) / train_split_dir[train_split] / split
 
             if processed_dir.exists() and any(processed_dir.iterdir()):
                 print(f"Processed directory already exists and is not empty: {processed_dir}, skipping preprocessing.")
@@ -109,76 +110,10 @@ def preprocess_l2arctic(
             ], check=True)
             
             print(f"\n✅ Processed .pt files: {processed_dir}")
-    # print(f"Run eval with: --data_path {raw_test_dir}")
-
-
-    # Test utts
-    # """Step 1: Create LibriSpeech-like raw structure → Step 2: Whisper encode."""
-    
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
-    # print(f"Using device: {device}")
-    
-    # # Stage 1: Create raw/ structure matching LibriSpeech
-    # raw_test_dir = Path(raw_output_dir) / "test" / split
-    # if not (raw_test_dir.exists() and any(raw_test_dir.iterdir())):
-    #     # Load L2-Arctic test utterances
-    #     print("Loading test set...")
-    #     test_utts = load_test_utterances(split=split)
-    #     print(f"Loaded {len(test_utts)} test utterances")
-
-    #     raw_test_dir.mkdir(parents=True, exist_ok=True)
-        
-    #     # Copy WAVs + create fake .trans.txt (LibriSpeech format)
-    #     transcripts = {}
-    #     for utt in tqdm(test_utts, desc="Copying WAVs"):
-    #         speaker = utt["speaker"]  
-    #         utt_id = f"{speaker}_{utt['utterance_id']}"  # e.g. "ABA_arctic_a0001"
-    #         wav_src = Path(utt["wav_path"])
-    #         wav_dst = raw_test_dir / f"{utt_id}.wav"
-            
-    #         # Copy WAV
-    #         shutil.copy2(wav_src, wav_dst)
-            
-    #         # Store transcript for .trans.txt
-    #         transcripts[utt_id] = utt["text"]
-    
-    #     # Write single .trans.txt (LibriSpeech format: "utt_id text")
-    #     with open(raw_test_dir / "data.trans.txt", "w") as f:
-    #         for utt_id, text in sorted(transcripts.items()):
-    #             f.write(f"{utt_id} {text}\n")
-        
-    #     print(f"✅ Raw data: {raw_test_dir}")
-    #     print(f"Created {len(transcripts)} WAVs + data.trans.txt")
-    # else:
-    #     print(f"Raw test directory already exists: {raw_test_dir}, skipping creation.")
-    
-    # # Stage 2: Run Whisfusion preprocess_audio on our fake LibriSpeech
-    # processed_dir = Path(processed_output_dir) / split
-
-    # if processed_dir.exists() and any(processed_dir.iterdir()):
-    #     print(f"Processed directory already exists and is not empty: {processed_dir}, skipping preprocessing.")
-    #     print(f"Run eval with: --data_path {raw_test_dir} or delete {processed_dir} to re-run preprocessing.")
-    #     return
-
-    # processed_dir.mkdir(parents=True, exist_ok=True)
-    
-    # print(f"\nProcessing with Whisper encoder...")
-    
-    # import subprocess
-    # subprocess.run([
-    #     "python",
-    #     "-m",
-    #     "models.whisfusion.src.data.preprocess_audio",
-    #     "--source_dir", str(raw_test_dir),
-    #     "--output_dir", str(processed_dir),
-    #     "--model_name", whisper_model
-    # ], check=True)
-    
-    # print(f"\n✅ Processed .pt files: {processed_dir}")
-    # print(f"Run eval with: --data_path {raw_test_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess L2-Arctic for Whisfusion")
+    parser.add_argument("--held_out_l1", default=None, help="Hold out this L1 when creating the files")
     parser.add_argument("--raw_output_dir", type=str, default="data/raw", help="Whisfusion raw dir")
     parser.add_argument("--processed_output_dir", type=str, default="data/processed", help="Whisfusion processed dir")
     parser.add_argument(
@@ -191,4 +126,4 @@ if __name__ == "__main__":
     parser.add_argument("--whisper_model", type=str, default="openai/whisper-small")
     
     args = parser.parse_args()
-    preprocess_l2arctic(args.raw_output_dir, args.processed_output_dir, args.split, args.whisper_model)
+    preprocess_l2arctic(args.raw_output_dir, args.processed_output_dir, args.split, args.whisper_model, args.held_out_l1)

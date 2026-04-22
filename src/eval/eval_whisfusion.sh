@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_model_perf_whisfusion_zeroshot
+#SBATCH --job-name=eval_model_perf_whisfusion_ft_scripted
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -20,6 +20,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.eval_whisfusion
+python -u -m src.eval.eval_whisfusion --model whisfusion_ft --split scripted
 
 echo "Evaluation completed."

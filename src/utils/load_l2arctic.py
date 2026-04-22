@@ -65,6 +65,7 @@ def _read_transcript(path: Path) -> str:
 def _iter_dir(
     wav_dir: Path,
     tg_dir:  Path,
+    annt_dir:Path,
     txt_dir: Path,
     speaker: str,
     split:   str,
@@ -77,6 +78,9 @@ def _iter_dir(
     for wav_path in sorted(wav_dir.glob("*.wav")):
         stem    = wav_path.stem
         tg_path = tg_dir / f"{stem}.TextGrid"
+        annt_path = annt_dir / f"{stem}.TextGrid"
+        if not annt_path.exists():
+            annt_path = None
         if not tg_path.exists():
             continue
         utts.append({
@@ -85,6 +89,7 @@ def _iter_dir(
             "l1":           SPEAKER_L1.get(speaker, "Unknown"),
             "wav_path":     str(wav_path),
             "textgrid":     str(tg_path),
+            "annotation":   str(annt_path),
             "text":         _read_transcript(txt_dir / f"{stem}.txt"),
             "split":        split,
             "domain":       domain,
@@ -97,6 +102,7 @@ def _iter_speaker_scripted(spk_dir: Path, split: str) -> List[Dict]:
         wav_dir = spk_dir / "wav",
         tg_dir  = spk_dir / "textgrid",
         txt_dir = spk_dir / "transcript",
+        annt_dir = spk_dir / "annotation",
         speaker = spk_dir.name,
         split   = split,
         domain  = "scripted",
