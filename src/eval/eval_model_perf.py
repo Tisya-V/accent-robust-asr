@@ -30,7 +30,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import torch
-from jiwer import wer as jiwer_wer
+import jiwer
 from tqdm import tqdm
 
 from src.config import LOCAL_L2ARCTIC_DIR, NLTK_DATA_PATH
@@ -62,7 +62,7 @@ def utt_per(ref: str, pred: str) -> float | None:
     pred_phones = " ".join(text_to_phones(pred))
     if not ref_phones:
         return None
-    return float(jiwer_wer(ref_phones, pred_phones))
+    return float(jiwer.wer(ref_phones, pred_phones))
 
 
 # ---------------------------------------------------------------------------
@@ -103,11 +103,7 @@ def transcribe(
             if sr != 16000:
                 audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
             
-            if utt.get("domain") == "spontaneous":
-                predictions.append(transcribe_long(audio, processor, model, device)) #reroute
-                continue
-            else:
-                audios.append(audio)  # handle scripted as before in batches
+            audios.append(audio)
 
         if not audios:
             continue
@@ -129,39 +125,39 @@ def transcribe(
         predictions.extend(processor.batch_decode(pred_ids, skip_special_tokens=True))
     return predictions
 
-def transcribe_long(audio, processor, model, device, chunk_s=28):
-    # note that this has hard cutoffs
-    # so may split words and stuff
-    # but this would be like max 4-8 words in a very long 1/2 min utterance
-    # so mostly hidden but worth noting
-    sr       = 16000
-    chunk_len = chunk_s * sr
+# def transcribe_long(audio, processor, model, device, chunk_s=28):
+#     # note that this has hard cutoffs
+#     # so may split words and stuff
+#     # but this would be like max 4-8 words in a very long 1/2 min utterance
+#     # so mostly hidden but worth noting
+#     sr       = 16000
+#     chunk_len = chunk_s * sr
 
-    if len(audio) <= chunk_len:
-        inputs = processor(audio, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
-        with torch.no_grad():
-            ids = model.generate(
-                inputs.input_features.to(device),
-                attention_mask=inputs.attention_mask.to(device),
-                language="en", task="transcribe", temperature=0.0,
-            )
-        return processor.decode(ids[0], skip_special_tokens=True).strip()
+#     if len(audio) <= chunk_len:
+#         inputs = processor(audio, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
+#         with torch.no_grad():
+#             ids = model.generate(
+#                 inputs.input_features.to(device),
+#                 attention_mask=inputs.attention_mask.to(device),
+#                 language="en", task="transcribe", temperature=0.0,
+#             )
+#         return processor.decode(ids[0], skip_special_tokens=True).strip()
 
-    parts = []
-    for start in range(0, len(audio), chunk_len):
-        chunk = audio[start : start + chunk_len]
-        if len(chunk) < sr:  # skip sub-1s tail
-            break
-        inputs = processor(chunk, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
-        with torch.no_grad():
-            ids = model.generate(
-                inputs.input_features.to(device),
-                attention_mask=inputs.attention_mask.to(device),
-                language="en", task="transcribe", temperature=0.0,
-            )
-        parts.append(processor.decode(ids[0], skip_special_tokens=True).strip())
+#     parts = []
+#     for start in range(0, len(audio), chunk_len):
+#         chunk = audio[start : start + chunk_len]
+#         if len(chunk) < sr:  # skip sub-1s tail
+#             break
+#         inputs = processor(chunk, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
+#         with torch.no_grad():
+#             ids = model.generate(
+#                 inputs.input_features.to(device),
+#                 attention_mask=inputs.attention_mask.to(device),
+#                 language="en", task="transcribe", temperature=0.0,
+#             )
+#         parts.append(processor.decode(ids[0], skip_special_tokens=True).strip())
 
-    return " ".join(parts)
+#     return " ".join(parts)
 
 # ---------------------------------------------------------------------------
 # Results assembly
@@ -170,8 +166,11 @@ def transcribe_long(audio, processor, model, device, chunk_s=28):
 def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFrame:
     rows = []
     for utt, pred in zip(utterances, predictions):
-        ref    = norm(utt["text"])
+        ref = norm(utt["text"])
         pred_n = norm(pred)
+
+        word_measures = jiwer.process_words(ref, pred_n) if ref else None
+
         rows.append({
             "utterance_id":    utt["utterance_id"],
             "speaker":         utt["speaker"],
@@ -183,7 +182,8 @@ def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFram
             "reference_norm":  ref,
             "prediction_norm": pred_n,
             "ref_num_words":   len(ref.split()),
-            "utt_wer":         float(jiwer_wer(ref, pred_n)) if ref else None,
+            "utt_wer":         float(word_measures.wer) if word_measures else None,
+            "utt_mer":         float(word_measures.mer) if word_measures else None,
             "utt_per":         utt_per(ref, pred_n),
         })
     return pd.DataFrame(rows)
@@ -215,11 +215,18 @@ def run_one(
     results = build_results(utterances, preds)
     results.to_csv(out_path, index=False)
 
-    wer = float(jiwer_wer(results["reference_norm"].tolist(),
-                           results["prediction_norm"].tolist()))
+    corpus_measures = jiwer.process_words(
+        results["reference_norm"].tolist(),
+        results["prediction_norm"].tolist(),
+    )
+
+    wer = float(corpus_measures.wer)
+    mer = float(corpus_measures.mer)
+
     per_vals = results["utt_per"].dropna()
-    per_str  = f"  PER={per_vals.mean():.3f}" if len(per_vals) else "  PER=n/a"
-    print(f"  WER={wer:.3f}{per_str}  →  {out_path}")
+    per_str = f"  PER={per_vals.mean():.3f}" if len(per_vals) else "  PER=n/a"
+
+    print(f"  WER={wer:.3f}  MER={mer:.3f}{per_str}  →  {out_path}")
 
     del model
     torch.cuda.empty_cache()

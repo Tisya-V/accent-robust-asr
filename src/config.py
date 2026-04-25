@@ -41,7 +41,7 @@ SPEAKER_L1 = {
 SPEAKERS = sorted(SPEAKER_L1.keys())
 # Hold out one speaker per L1 for testing
 # Even amount of f/m
-TEST_SPEAKERS = {"SKA", "BWC", "SVBI", "HJK", "EBVS", "HQTV"}
+TEST_SPEAKERS = {"ZHAA", "BWC", "SVBI", "HJK", "EBVS", "HQTV"}
 TRAIN_SPEAKERS = set(SPEAKERS) - TEST_SPEAKERS
 L1_GROUPS = sorted(set(SPEAKER_L1.values()))
 L1_2_ID   = {l1: i for i, l1 in enumerate(L1_GROUPS)}

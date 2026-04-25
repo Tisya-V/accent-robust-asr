@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-import jiwer
+from jiwer import wer, mer, process_words
 from tqdm import tqdm
 
 from src.config import LOCAL_L2ARCTIC_DIR, MODELS_DIR, NLTK_DATA_PATH
@@ -179,9 +179,12 @@ def evaluate(dataset, model: WhisfusionWrapper):
 
     assert len(predictions) == len(dataset)
 
+
     for d, pred in zip(dataset, predictions):
         ref = norm(d["text"])
         pred_n = norm(pred)
+
+        word_measures = process_words(ref, pred_n) if ref else None
 
         rows.append({
             "utterance_id": d["utterance_id"],
@@ -194,7 +197,8 @@ def evaluate(dataset, model: WhisfusionWrapper):
             "reference_norm": ref,
             "prediction_norm": pred_n,
             "ref_num_words": len(ref.split()),
-            "utt_wer": jiwer.wer(ref, pred_n) if ref else None,
+            "utt_wer": float(word_measures.wer) if word_measures else None,
+            "utt_mer": float(word_measures.mer) if word_measures else None,
             "utt_per": utt_per(ref, pred_n),
         })
 
@@ -250,10 +254,11 @@ def main():
     refs = df["reference_norm"].fillna("").tolist()
     hyps = df["prediction_norm"].fillna("").tolist()
 
-    corpus_wer = jiwer.wer(refs, hyps)
+    corpus_measures = process_words(refs, hyps)
     per = df["utt_per"].dropna().mean()
 
-    print(f"\nWER: {corpus_wer:.3f}")
+    print(f"\nWER: {corpus_measures.wer:.3f}")
+    print(f"MER: {corpus_measures.mer:.3f}")
     print(f"PER: {per:.3f}")
     print(f"Saved → {output_path}")
 
