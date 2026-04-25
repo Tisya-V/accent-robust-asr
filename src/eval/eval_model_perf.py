@@ -1,6 +1,6 @@
 """
 eval_model_perf.py
-Inference + WER/PER computation across models and splits.
+Inference + WER/PER computation across models.
 Designed to run as a SLURM job — results cached to CSV for notebook visualisation.
 
 Scripted     → 6 held-out test speakers, never seen during training.
@@ -11,14 +11,14 @@ PER: phoneme error rate — G2P(prediction) vs G2P(reference), both via g2p_en.
      (text-derived, labels as "PER (G2P)" in reporting)
 
 Usage:
-    python eval_model_perf.py --models baseline,baseline_lora --splits scripted spontaneous
-    python eval_model_perf.py --models ctc_aux --splits scripted
+    python eval_model_perf.py --models baseline,baseline_lora 
+    python eval_model_perf.py --models ctc_aux
 
     # Via SLURM:
     sbatch --gres=gpu:1 --wrap="python eval_model_perf.py --models baseline,baseline_lora"
 
 Output:
-    results/model_perf_comparison/{model_key}_{split}_predictions.csv
+    results/model_perf_comparison/{model_key}_predictions.csv
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ os.environ["NLTK_DATA"] = NLTK_DATA_PATH
 
 import g2p_en
 
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 
 _G2P = g2p_en.G2p()
 
@@ -190,18 +190,17 @@ def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFram
 
 
 # ---------------------------------------------------------------------------
-# Per-split, per-model runner
+# per-model runner
 # ---------------------------------------------------------------------------
 
 def run_one(
     model_key:  str,
-    split:      str,
     utterances: list[dict],
     registry:   dict,
     device:     str,
     output_dir: str,
 ) -> None:
-    out_path = Path(output_dir) / f"{model_key}_{split}_predictions.csv"
+    out_path = Path(output_dir) / f"{model_key}_predictions.csv"
     if out_path.exists():
         print(f"  [skip] {out_path} already exists — delete to re-run")
         return
@@ -210,7 +209,7 @@ def run_one(
     model, processor = registry[model_key]["loader"]()
     model.eval()
 
-    print(f"  Transcribing {len(utterances):,} utterances [{split}] ...")
+    print(f"  Transcribing {len(utterances):,} utterances ...")
     preds   = transcribe(utterances, processor, model, device)
     results = build_results(utterances, preds)
     results.to_csv(out_path, index=False)
@@ -243,18 +242,14 @@ def main():
     p.add_argument("--data_root",  default=LOCAL_L2ARCTIC_DIR)
     p.add_argument("--models",     default="baseline",
                    help="Comma-separated keys from MODEL_REGISTRY")
-    p.add_argument("--splits",     default=["scripted", "spontaneous"], nargs="+",
-                   help="scripted | spontaneous  (space- or comma-separated)")
     p.add_argument("--output_dir", default="results/model_perf_comparison")
     p.add_argument("--batch_size", type=int, default=BATCH_SIZE)
     args = p.parse_args()
 
-    splits     = [s for tok in args.splits for s in tok.split(",")]
     model_keys = [k.strip() for k in args.models.split(",")]
 
     print(f"=== eval_model_perf  device={device} ===")
     print(f"    models  : {model_keys}")
-    print(f"    splits  : {splits}")
 
     registry = get_model_registry(device)
     for key in model_keys:
@@ -263,18 +258,12 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    datasets: dict[str, list[dict]] = {}
-    for split in splits:
-        if split not in ("scripted", "spontaneous"):
-            raise ValueError(f"Unknown split \'{split}\'. Choose: scripted, spontaneous")
-        utts = load_test_utterances(local_root=args.data_root, split=split)
-        datasets[split] = utts
-        print(f"  {split}: {len(utts):,} utterances")
+    utts = load_test_utterances(local_root=args.data_root)
+    print(f"Testing with {len(utts):,} utterances")
 
     for key in model_keys:
         print(f"\n[Model: {key}]")
-        for split, utterances in datasets.items():
-            run_one(key, split, utterances, registry, device, args.output_dir)
+        run_one(key, utts, registry, device, args.output_dir)
 
     print("\nAll done.")
 

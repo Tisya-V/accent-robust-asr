@@ -28,6 +28,7 @@ CTC_AUX_DIR  = "models/ctc_aux"
 FEAT_AUX_DIR = "models/feat_aux"
 BOTH_AUX_DIR = "models/both_aux"
 NO_AUX_DIR   = "models/no_aux"
+WHISPER_FT_DIR = "models/whisper_ft"
 
 
 def _processor(model_id: str = BASE_MODEL_ID) -> WhisperProcessor:
@@ -44,6 +45,10 @@ def get_model_registry(device):
         "no_aux": {
             "label": "No Aux",
             "loader": lambda: load_aux_model(device=device, checkpoint_dir=NO_AUX_DIR)
+        },
+        "whisper_ft": {
+            "label": "Whisper Fine-tuned",
+            "loader": lambda: load_aux_model(device=device, checkpoint_dir=WHISPER_FT_DIR)
         },
         "no_aux_heldout_chinese": {
             "label": "No Aux (Held-out Chinese)",

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=whisper_feat_aux0p2
+#SBATCH --job-name=whisper_ft
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=18:00:00
@@ -22,12 +22,12 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 nvidia-smi
 
 python -u -m src.training.train_aux \
-    --output_dir models/feat_aux0p2 \
-    --ctc_layer 7 \
+    --output_dir models/whisper_ft \
     --lambda_ctc 0.00 \
-    --lambda_feat 0.20 \
+    --lambda_feat 0.00 \
     --epochs 10 \
-    --feat_layer 11 
+    # --feat_layer 11 
+    # --ctc_layer 7 \
     # --held_out_l1 Chinese \
 
 echo "Training completed."

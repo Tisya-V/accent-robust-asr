@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-from jiwer import wer, mer, process_words
+import jiwer
 from tqdm import tqdm
 
 from src.config import LOCAL_L2ARCTIC_DIR, MODELS_DIR, NLTK_DATA_PATH
@@ -139,8 +139,8 @@ class WhisfusionWrapper:
 # ---------------------------------------------------------------------------
 # Load encoded features (for eval)
 # ---------------------------------------------------------------------------
-def build_pt_dataset(utterances, processed_root="data/processed/test", split="scripted"):
-    pt_root = Path(processed_root) / split
+def build_pt_dataset(utterances, processed_root="data/processed/test"):
+    pt_root = Path(processed_root)
 
     id_to_pt = {
         p.stem: p
@@ -184,7 +184,7 @@ def evaluate(dataset, model: WhisfusionWrapper):
         ref = norm(d["text"])
         pred_n = norm(pred)
 
-        word_measures = process_words(ref, pred_n) if ref else None
+        word_measures = jiwer.process_words(ref, pred_n) if ref else None
 
         rows.append({
             "utterance_id": d["utterance_id"],
@@ -213,7 +213,6 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", default=LOCAL_L2ARCTIC_DIR)
-    parser.add_argument("--split", default="scripted", choices=["scripted", "spontaneous"])
     parser.add_argument("--output_dir", default="results/model_perf_comparison")
     parser.add_argument("--base_model_path", default="models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors")
     parser.add_argument("--model", default="whisfusion")
@@ -224,7 +223,7 @@ def main():
 
     adapter_path = f"{MODELS_DIR}/{args.model}/{args.model}_stage2_decoder.pt"
     # check if eval files already exist
-    output_file = f"{args.model}_{args.split}_predictions.csv"
+    output_file = f"{args.model}_predictions.csv"
     output_path = Path(args.output_dir) / output_file
     if output_path.exists():
         print(f"  [skip] {output_path} already exists — delete to re-run")
@@ -232,9 +231,9 @@ def main():
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # load data
-    utterances = load_test_utterances(local_root=args.data_root, split=args.split)
+    utterances = load_test_utterances(local_root=args.data_root)
     print(f"Loaded {len(utterances)} utterances")
-    dataset = build_pt_dataset(utterances, split=args.split)
+    dataset = build_pt_dataset(utterances)
     print(f"Using {len(dataset)} utterances with cached features")
 
     # load model
@@ -254,7 +253,7 @@ def main():
     refs = df["reference_norm"].fillna("").tolist()
     hyps = df["prediction_norm"].fillna("").tolist()
 
-    corpus_measures = process_words(refs, hyps)
+    corpus_measures = jiwer.process_words(refs, hyps)
     per = df["utt_per"].dropna().mean()
 
     print(f"\nWER: {corpus_measures.wer:.3f}")

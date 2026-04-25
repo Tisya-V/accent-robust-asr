@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_model_perf_baselines_spontaneous
+#SBATCH --job-name=eval_model_perf_whisper_baselines
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -32,7 +32,6 @@ echo "PATH first 3: ${PATH%%:*} ${PATH#*:} ${PATH%%:*${PATH#*:*}}"
 echo "====================="
 
 srun python -u -m src.eval.eval_model_perf \
-    --models "baseline, no_aux, no_aux_heldout_chinese" \
-    --split spontaneous
+    --models "baseline, whisper_ft"
 
 echo "Evaluation completed."

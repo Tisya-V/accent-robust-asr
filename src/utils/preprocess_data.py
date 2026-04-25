@@ -61,7 +61,12 @@ def write_raw_split(raw_split_dir: Path, utterances: list[dict]):
         speaker_dir.mkdir(parents=True, exist_ok=True)
 
         wav_dst = speaker_dir / f"{utt_id}.wav"
-        shutil.copy2(utt["wav_path"], wav_dst)
+        src = Path(utt["wav_path"]).resolve()
+
+        if wav_dst.exists() or wav_dst.is_symlink():
+            wav_dst.unlink()
+
+        wav_dst.symlink_to(src)
 
         transcripts[utt_id] = utt.get("text", "")
 
