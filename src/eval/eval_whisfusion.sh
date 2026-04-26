@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_model_perf_whisfusion_ft_scripted
+#SBATCH --job-name=eval_whisfusion_ft
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -9,7 +9,7 @@
 export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
 export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
 export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
-export MATPLOTLIB_CACHE_DIR=/vol/bitbucket/$USER/.cache/matplotlib
+export MPLCONFIGDIR=/vol/bitbucket/$USER/.cache/matplotlib
 export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
 
 source activate
@@ -20,6 +20,6 @@ cd /vol/bitbucket/$USER/accent-robust-asr/
 
 nvidia-smi
 
-python -u -m src.eval.eval_whisfusion --model whisfusion_ft --split scripted
+python -u -m src.eval.eval_whisfusion --model whisfusion_ft
 
 echo "Evaluation completed."

@@ -4,12 +4,11 @@ src/utils/model_loader.py
 Utility loaders for each trained model checkpoint.
 
 Usage:
-    from src.utils.model_loader import load_baseline, load_baseline_lora, load_ctc_aux
+    from src.utils.model_loader import load_baseline_whisper, load_finetuned_whisper
 
     model, processor = load_baseline()
-    model, processor = load_baseline_lora()
-    model, processor = load_aux_model()        # merged LoRA, no aux heads
-    model, processor = load_ctc_aux_full()   # WhisperWithAuxHeads (with heads intact)
+    model, processor = load_finetuned_whisper()
+    model, processor = load_finetuned_whisper(checkpoint_dir=WHISPER_FT_HOC_DIR)
 """
 
 from __future__ import annotations
@@ -20,15 +19,10 @@ from typing import Tuple
 import torch
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-from src.training.whisper_aux import WhisperWithAuxHeads
 
 BASE_MODEL_ID   = "openai/whisper-small"
-BASELINE_LORA   = "models/baseline_loraft"
-CTC_AUX_DIR  = "models/ctc_aux"
-FEAT_AUX_DIR = "models/feat_aux"
-BOTH_AUX_DIR = "models/both_aux"
-NO_AUX_DIR   = "models/no_aux"
 WHISPER_FT_DIR = "models/whisper_ft"
+WHISPER_FT_HOC_DIR = "models/whisper_ft_hoc"
 
 
 def _processor(model_id: str = BASE_MODEL_ID) -> WhisperProcessor:
@@ -39,52 +33,16 @@ def get_model_registry(device):
     return {
         "baseline":      {
             "label": "Zero-shot",    
-            "loader": lambda: load_baseline(device=device)
-        },
-
-        "no_aux": {
-            "label": "No Aux",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir=NO_AUX_DIR)
+            "loader": lambda: load_baseline_whisper(device=device)
         },
         "whisper_ft": {
             "label": "Whisper Fine-tuned",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir=WHISPER_FT_DIR)
+            "loader": lambda: load_finetuned_whisper(device=device, checkpoint_dir=WHISPER_FT_DIR)
         },
-        "no_aux_heldout_chinese": {
-            "label": "No Aux (Held-out Chinese)",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/no_aux_heldout_chinese")
-        },
-
-        "ctc_aux": {
-            "label": "CTC Aux",      
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir=CTC_AUX_DIR)
-        },
-        "ctc_aux_l3": {
-            "label": "CTC Aux",      
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/ctc_aux_l3")
-        },
-        "ctc_aux_l7": {
-            "label": "CTC Aux",      
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/ctc_aux_l7")
-        },
-
-        "feat_aux": {
-            "label": "Feature Aux",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir=FEAT_AUX_DIR)
-        },
-
-        "feat_aux0p2": {
-            "label": "Feature Aux",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/feat_aux0p2")
-        },
-        "feat_aux_heldout_chinese": {
-            "label": "Feature Aux (Held-out Chinese)",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/feat_aux_heldout_chinese")
-        },
-        "feat_aux0p3": {
-            "label": "Feature Aux",
-            "loader": lambda: load_aux_model(device=device, checkpoint_dir="models/feat_aux0p3")
-        },
+        "whisper_ft_hoc": {
+            "label": "Whisper Fine-tuned [Held-out Chinese]",
+            "loader": lambda: load_finetuned_whisper(device=device, checkpoint_dir=WHISPER_FT_HOC_DIR)
+        }
     }
 
 
@@ -92,7 +50,7 @@ def get_model_registry(device):
 # Baseline — frozen openai/whisper-small, no fine-tuning
 # ---------------------------------------------------------------------------
 
-def load_baseline(
+def load_baseline_whisper(
     device: str | None = None,
 ) -> Tuple[WhisperForConditionalGeneration, WhisperProcessor]:
     """
@@ -108,52 +66,12 @@ def load_baseline(
     return model, processor
 
 
-# ---------------------------------------------------------------------------
-# Baseline LoRA — whisper-small fine-tuned with LoRA, no aux heads
-# ---------------------------------------------------------------------------
-
-def load_baseline_lora(
-    checkpoint_dir: str = BASELINE_LORA,
-    device: str | None = None,
-    merged: bool = True,
-) -> Tuple[WhisperForConditionalGeneration, WhisperProcessor]:
-    """
-    LoRA fine-tuned whisper-small (standard ASR objective only).
-
-    Args:
-        checkpoint_dir: path to saved PEFT checkpoint
-        merged:         if True, merge LoRA weights and return a plain
-                        WhisperForConditionalGeneration (faster inference).
-                        if False, return PeftModel (useful for inspecting adapters).
-    """
-    from peft import PeftModel
-
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-
-    base = WhisperForConditionalGeneration.from_pretrained(
-        BASE_MODEL_ID, local_files_only=True
-    )
-    model = PeftModel.from_pretrained(base, checkpoint_dir)
-
-    if merged:
-        model = model.merge_and_unload()
-
-    model = model.to(device)
-    model.eval()
-    processor = _processor(checkpoint_dir)
-    return model, processor
-
-
-# ---------------------------------------------------------------------------
-# CTC Aux — whisper-small + LoRA fine-tuned with CTC phoneme auxiliary loss
-# ---------------------------------------------------------------------------
-
-def load_aux_model(
-    checkpoint_dir: str = CTC_AUX_DIR,
+def load_finetuned_whisper(
+    checkpoint_dir: str = WHISPER_FT_DIR,
     device: str | None = None,
 ) -> Tuple[WhisperForConditionalGeneration, WhisperProcessor]:
     """
-    CTC-aux fine-tuned model, returned as a plain WhisperForConditionalGeneration
+    Fine-tuned model, returned as a plain WhisperForConditionalGeneration
     (LoRA merged, aux heads discarded).
 
     Use this for WER evaluation and probing — identical interface to load_baseline()
@@ -176,91 +94,3 @@ def load_aux_model(
     processor_path = str(ckpt) if (ckpt / "tokenizer_config.json").exists() else BASE_MODEL_ID
     processor = _processor(processor_path)
     return model, processor
-
-
-def load_ctc_aux_full(
-    checkpoint_dir: str = CTC_AUX_DIR,
-    device: str | None = None,
-    lambda_ctc: float = 0.3,
-    lambda_feat: float = 0.0,
-) -> Tuple[WhisperWithAuxHeads, WhisperProcessor]:  # noqa: F821
-    """
-    CTC-aux model with aux heads intact (WhisperWithAuxHeads wrapper).
-
-    Use this if you need the CTC head outputs directly (e.g. phoneme forced
-    alignment, or continuing training).
-
-    Args:
-        lambda_ctc / lambda_feat: must match the values used during training
-                                  so hooks are registered correctly.
-    """
-    from peft import PeftModel
-    from src.training.whisper_aux import WhisperWithAuxHeads
-
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = Path(checkpoint_dir) / "best"
-    ctc_head_path  = Path(checkpoint_dir) / "best_ctc_head.pt"
-    feat_head_path = Path(checkpoint_dir) / "best_feat_head.pt"
-
-    model = WhisperWithAuxHeads(
-        model_name  = BASE_MODEL_ID,
-        lambda_ctc  = lambda_ctc,
-        lambda_feat = lambda_feat,
-    )
-
-    # Load LoRA weights into whisper backbone
-    model.whisper = PeftModel.from_pretrained(model.whisper, str(ckpt))
-    model.whisper = model.whisper.merge_and_unload()
-    model._register_hooks()  # re-register hooks to capture from merged model
-
-    # Load aux head weights
-    if ctc_head_path.exists():
-        model.ctc_head.load_state_dict(
-            torch.load(ctc_head_path, map_location=device)
-        )
-    if feat_head_path.exists():
-        model.feat_head.load_state_dict(
-            torch.load(feat_head_path, map_location=device)
-        )
-
-    model = model.to(device)
-    model.eval()
-
-    processor_path = str(ckpt) if (ckpt / "tokenizer_config.json").exists() else BASE_MODEL_ID
-    processor = _processor(processor_path)
-    return model, processor
-
-
-# ---------------------------------------------------------------------------
-# Convenience: load all models at once (for probing / eval scripts)
-# ---------------------------------------------------------------------------
-
-def load_all_for_probing(
-    device: str | None = None,
-) -> dict:
-    """
-    Returns a dict of {name: (model, processor)} for all available checkpoints.
-    Models are plain WhisperForConditionalGeneration (merged, eval mode).
-
-    Example:
-        models = load_all_for_probing()
-        for name, (model, proc) in models.items():
-            records = build_embedding_dataset(model, proc, utterances, ...)
-    """
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    out = {}
-
-    out["baseline"] = load_baseline(device=device)
-
-    if Path(BASELINE_LORA).exists():
-        out["baseline_lora"] = load_baseline_lora(device=device)
-    else:
-        print(f"[WARN] {BASELINE_LORA} not found, skipping")
-
-    if (Path(CTC_AUX_DIR) / "best").exists():
-        out["ctc_aux"] = load_aux_model(device=device)
-    else:
-        print(f"[WARN] {CTC_AUX_DIR}/best not found, skipping")
-
-    print(f"Loaded models: {list(out.keys())}")
-    return out

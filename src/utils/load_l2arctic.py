@@ -254,6 +254,7 @@ def _load_raw_scripted(
 def load_test_utterances(
     local_root: str | Path = LOCAL_L2ARCTIC_DIR,
     test_speakers: Set[str] = TEST_SPEAKERS,
+    include_spontaneous: bool = False,
     include_cmu_native: bool = True,
     cmu_root: str | Path | None = "data",
     cmu_speakers: Set[str] = frozenset({"bdl"}),
@@ -261,28 +262,8 @@ def load_test_utterances(
     include_edacc: bool = True,
     max_edacc_utts: int | None = None,
 ) -> List[Dict]:
-    
-    utts =  load_spontaneous(Path(local_root) / SPONTANEOUS_SUBDIR / "manifest.csv")
-    utts = [u for u in utts if u["speaker"] in test_speakers]
-    print(f"[l2arctic] Loaded {len(utts)} spontaneous utterances from {len(set(u['speaker'] for u in utts))} speakers")
 
-    if include_edacc:
-        utts.extend(
-            _load_edacc_utterances(
-                manifest_path="data/edacc_jamaican_subset/jamaican_subset_all.csv",
-                l1="Jamaican",
-                max_utts=max_edacc_utts,
-            )
-        )
-        utts.extend(
-            _load_edacc_utterances(
-                manifest_path="data/edacc_english_subset/english_subset_all.csv",
-                l1="English",
-                max_utts=max_edacc_utts,
-            )
-        )
-
-    utts.extend(_load_raw_scripted(Path(local_root), test_speakers, "test"))
+    utts = _load_raw_scripted(Path(local_root), test_speakers, "test")
 
     if include_cmu_native:
         if cmu_root is None:
@@ -293,7 +274,28 @@ def load_test_utterances(
                 speakers=cmu_speakers,
                 max_utts_per_speaker=max_cmu_utts_per_speaker,
             )
-        )
+        )    
+        
+    if include_spontaneous:
+        utts.extend(load_spontaneous(Path(local_root) / SPONTANEOUS_SUBDIR / "manifest.csv"))
+        utts = [u for u in utts if u["speaker"] in test_speakers]
+        print(f"[l2arctic] Loaded {len(utts)} spontaneous utterances from {len(set(u['speaker'] for u in utts))} speakers")
+
+        if include_edacc:
+            utts.extend(
+                _load_edacc_utterances(
+                    manifest_path="data/edacc_jamaican_subset/jamaican_subset_all.csv",
+                    l1="Jamaican",
+                    max_utts=max_edacc_utts,
+                )
+            )
+            utts.extend(
+                _load_edacc_utterances(
+                    manifest_path="data/edacc_english_subset/english_subset_all.csv",
+                    l1="English",
+                    max_utts=max_edacc_utts,
+                )
+            )
 
     for u in utts:
         u["split"] = "test"
@@ -306,7 +308,7 @@ def load_train_dev_utterances(
     dev_fraction: float      = 0.15,
     random_seed:  int        = RANDOM_SEED,
     held_out_l1:  str | None   = None,
-    include_spontaneous: bool = True,
+    include_spontaneous: bool = False,
 ) -> tuple[List[Dict], List[Dict]]:
     """
     Utterances from the 18 non-held-out speakers split into train / dev
@@ -331,6 +333,7 @@ def load_train_dev_utterances(
         u["split"] = "dev"
 
     if include_spontaneous:
+        print("Including spontaneous utterances in training/dev splits ...")
         utts_spontaneous = load_spontaneous(Path(local_root) / SPONTANEOUS_SUBDIR / "manifest.csv")
         utts_spontaneous = [u for u in utts_spontaneous if u["speaker"] in speakers]
         train_spontaneous, dev_spontaneous = train_test_split(
@@ -484,11 +487,13 @@ def load_probe_utterances(
 
 if __name__ == "__main__":
     # # Load utterances
-    train, dev = load_train_dev_utterances()
+    train, dev = load_train_dev_utterances(held_out_l1="Chinese")
     import pandas as pd
     train_df = pd.DataFrame(train)
     speakers = train_df["speaker"].unique()
+    domains = train_df["domain"].unique()
     print(f"Train speakers [found {len(speakers)}]: {sorted(speakers)}")
+    print(f"Train domains: {sorted(domains)}")
     # print("Columns:", df.columns.tolist())
     # print(df[["speaker", "l1", "text"]].head())
 
@@ -499,4 +504,6 @@ if __name__ == "__main__":
     test_df = pd.DataFrame(test)
     # print speakers
     speakers = test_df["speaker"].unique()
+    domains = test_df["domain"].unique()
     print(f"Test speakers [found {len(speakers)}]: {sorted(speakers)}")
+    print(f"Test domains: {sorted(domains)}")

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_model_perf_whisper_baselines
+#SBATCH --job-name=eval_whisper_ft_hoc
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
@@ -31,7 +31,7 @@ which python
 echo "PATH first 3: ${PATH%%:*} ${PATH#*:} ${PATH%%:*${PATH#*:*}}"
 echo "====================="
 
-srun python -u -m src.eval.eval_model_perf \
-    --models "baseline, whisper_ft"
+srun python -u -m src.eval.eval_whisper \
+    --models "whisper_ft_hoc"
 
 echo "Evaluation completed."
