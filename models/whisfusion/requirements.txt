@@ -1,0 +1,39 @@
+# Whisfusion Requirements
+# Requires Python 3.10+
+
+# Core dependencies
+numpy
+packaging
+ninja
+
+# FlashAttention optimizations
+# Note: flash-attn must be installed from source - see README
+xformers==0.0.28.post1
+
+# Transformers and tokenizers
+transformers>=4.30.0
+tokenizers
+sentencepiece
+
+# Training frameworks
+lightning>=2.0.0
+torch-ema>=0.3
+lightning-utilities
+
+# Model storage
+safetensors>=0.3.1
+huggingface-hub>=0.16.0
+
+# Evaluation
+jiwer>=3.0.0
+lm-eval==0.4.4
+
+# Progress and logging
+tqdm>=4.65.0
+tensorboard>=2.13.0
+
+# Optional optimizations
+bitsandbytes==0.43.1
+
+# Type hints
+typing-extensions
