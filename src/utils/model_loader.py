@@ -21,8 +21,8 @@ from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 
 BASE_MODEL_ID   = "openai/whisper-small"
-WHISPER_FT_DIR = "models/whisper_ft"
-WHISPER_FT_HOC_DIR = "models/whisper_ft_hoc"
+WHISPER_FT_DIR = "models/whisper_finetuned"
+WHISPER_FT_HOC_DIR = "models/whisper_finetuned_hoc"
 
 
 def _processor(model_id: str = BASE_MODEL_ID) -> WhisperProcessor:
@@ -35,11 +35,11 @@ def get_model_registry(device):
             "label": "Zero-shot",    
             "loader": lambda: load_baseline_whisper(device=device)
         },
-        "whisper_ft": {
+        "whisper_finetuned": {
             "label": "Whisper Fine-tuned",
             "loader": lambda: load_finetuned_whisper(device=device, checkpoint_dir=WHISPER_FT_DIR)
         },
-        "whisper_ft_hoc": {
+        "whisper_finetuned_hoc": {
             "label": "Whisper Fine-tuned [Held-out Chinese]",
             "loader": lambda: load_finetuned_whisper(device=device, checkpoint_dir=WHISPER_FT_HOC_DIR)
         }
@@ -80,17 +80,16 @@ def load_finetuned_whisper(
     from peft import PeftModel
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = Path(checkpoint_dir) / "best"
 
     base = WhisperForConditionalGeneration.from_pretrained(
         BASE_MODEL_ID, local_files_only=True
     )
-    model = PeftModel.from_pretrained(base, str(ckpt))
+    model = PeftModel.from_pretrained(base, str(checkpoint_dir))
     model = model.merge_and_unload()
     model = model.to(device)
     model.eval()
 
     # Processor saved alongside checkpoint
-    processor_path = str(ckpt) if (ckpt / "tokenizer_config.json").exists() else BASE_MODEL_ID
+    processor_path = str(checkpoint_dir) if (Path(checkpoint_dir) / "tokenizer_config.json").exists() else BASE_MODEL_ID
     processor = _processor(processor_path)
     return model, processor

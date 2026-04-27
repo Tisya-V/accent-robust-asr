@@ -9,7 +9,6 @@ Then runs Whisper encoder preprocessing on each split.
 """
 
 import argparse
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -91,12 +90,9 @@ def preprocess_split(raw_split_dir: Path, processed_split_dir: Path, whisper_mod
             "python",
             "-m",
             "models.whisfusion.src.data.preprocess_audio",
-            "--source_dir",
-            str(raw_split_dir),
-            "--output_dir",
-            str(processed_split_dir),
-            "--model_name",
-            whisper_model,
+            "--source_dir", str(raw_split_dir),
+            "--output_dir", str(processed_split_dir),
+            "--model_name", whisper_model,
         ],
         check=True,
     )
