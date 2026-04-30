@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=whisfusion_train_stage2
+#SBATCH --job-name=whisfusion_perturbed_train_stage2
 #SBATCH --partition=a30
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -59,16 +59,17 @@ echo -e "\n\n==============================\n\n"
 
 echo "Starting Stage 2: Decoder Specialization (High Mask Ratio)..."
 
-fabric run models/whisfusion/src/training/train_stage2_decoder_high_ratio.py \
+fabric run src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py \
    --strategy=ddp \
    --devices=3 \
-   --train_data_dir data/processed/train__heldout-Chinese/scripted \
-   --val_data_dir   data/processed/dev__heldout-Chinese/scripted \
-   --pretrain_path  models/whisfusion_ft_hoc/stage1_adapter/stage1_adapter.pt\
+   --train_data_dir data/processed/train/ \
+   --val_data_dir   data/processed/dev/ \
+   --pretrain_path  models/whisfusion_ft/stage1_adapter/stage1_adapter.pt\
    --base_model_path models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors \
-   --out_dir        models/whisfusion_ft_hoc/stage2_decoder_high_ratio \
+   --out_dir        models/whisfusion_with_perturbs0.7/stage2_decoder_high_ratio \
    --model_name     Diff_LLaMA_170M \
    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T \
+   --perturb_prob 0.0 \
    --num_devices 3              \
    --batch_size 48             \
    --gradient_accumulation_steps 2 \

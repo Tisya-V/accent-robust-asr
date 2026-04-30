@@ -23,6 +23,7 @@ from transformers import WhisperForConditionalGeneration, WhisperProcessor
 BASE_MODEL_ID   = "openai/whisper-small"
 WHISPER_FT_DIR = "models/whisper_finetuned"
 WHISPER_FT_HOC_DIR = "models/whisper_finetuned_hoc"
+WHISPER_FT_HOV_DIR = "models/whisper_finetuned_hov"
 
 
 def _processor(model_id: str = BASE_MODEL_ID) -> WhisperProcessor:
@@ -42,6 +43,10 @@ def get_model_registry(device):
         "whisper_finetuned_hoc": {
             "label": "Whisper Fine-tuned [Held-out Chinese]",
             "loader": lambda: load_finetuned_whisper(device=device, checkpoint_dir=WHISPER_FT_HOC_DIR)
+        },
+        "whisper_finetuned_hov": {
+            "label": "Whisper Fine-tuned [Held-out Vietnamese]",
+            "loader": lambda: load_finetuned_whisper(device=device, checkpoint_dir=WHISPER_FT_HOV_DIR)
         }
     }
 

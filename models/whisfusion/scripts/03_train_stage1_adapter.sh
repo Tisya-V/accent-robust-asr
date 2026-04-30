@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=whisfusion_train_stage1
+#SBATCH --job-name=whisfusion_ft_hov_train_stage1
 #SBATCH --partition=a30
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -60,10 +60,10 @@ echo "Starting Stage 1: Adapter Training..."
 fabric run models/whisfusion/src/training/train_stage1_adapter.py \
     --strategy=ddp \
     --devices=3 \
-    --train_data_dir data/processed/train \
-    --val_data_dir   data/processed/dev \
+    --train_data_dir data/processed/train_ho_vietnamese \
+    --val_data_dir   data/processed/dev_ho_vietnamese \
     --pretrain_path  models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors \
-    --out_dir        models/whisfusion_ft/stage1_adapter \
+    --out_dir        models/whisfusion_ft_hov/stage1_adapter \
     --num_devices    3 \
     --batch_size     48 \
     --gradient_accumulation_steps 4 \
