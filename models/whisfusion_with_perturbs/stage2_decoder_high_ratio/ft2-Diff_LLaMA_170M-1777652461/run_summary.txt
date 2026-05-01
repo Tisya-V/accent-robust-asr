@@ -1,0 +1,54 @@
+WhisFusion Experiment 1: Phoneme Perturb + High-Mask Stage 2
+============================================================
+
+Base model: models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors
+Output dir: models/whisfusion_with_perturbs/stage2_decoder_high_ratio/ft2-Diff_LLaMA_170M-1777652461
+Perturbation: Enabled
+Perturbation probability: 0.3
+Include perturb in loss: Yes
+Phoneme neighbours (k): 10
+Mask range: 0.7-1.0
+Batch size: 48
+LR: 1e-05 (scaled: 3.75e-06)
+Epochs: 40
+Pretrain: models/whisfusion_ft/stage1_adapter/stage1_adapter.pt
+
+Full args:
+  base_model_path: models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors
+  batch_size: 48
+  compute_wer_cer: True
+  early_stop_metric: loss
+  ema_decay: 0.995
+  epochs: 40
+  gradient_accumulation_steps: 2
+  gradient_clip_val: 0.5
+  include_perturb_in_loss: True
+  layer_wise_lr_decay_rate: 0.9
+  learning_rate: 1e-05
+  lr_scaling: linear
+  max_mask_ratio: 1.0
+  min_mask_ratio: 0.7
+  model_name: Diff_LLaMA_170M
+  num_devices: 3
+  num_workers: 4
+  out_dir: models/whisfusion_with_perturbs/stage2_decoder_high_ratio
+  out_model_name: whisfusion
+  patience: 5
+  perturb_prob: 0.3
+  perturber_cache_dir: src/utils/cache
+  perturber_k: 10
+  precision: 32-true
+  pretrain_path: models/whisfusion_ft/stage1_adapter/stage1_adapter.pt
+  resume: False
+  save_every_n_epochs: 5
+  scheduler_type: cosine
+  second_stage_lr_multiplier: 0.5
+  tokenizer_name: TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T
+  train_data_dir: ['data/processed/train/']
+  use_ema: True
+  use_layer_wise_lr_decay: True
+  use_phoneme_perturber: True
+  val_data_dir: ['data/processed/dev/']
+  val_steps: -1
+  warmup_ratio: 0.1
+  weight_decay: 0.005

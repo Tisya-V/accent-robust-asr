@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-train_stage2_decoder_high_ratio.py
+train_stage2_decoder_high_ratio_with_perturbs.py
 
-Stage 2 training for Whisfusion - fine-tunes full decoder and adapter with high masking ratios
-to specialize in initial token generation.
+EXPERIMENT 1: Word-level phoneme-aware diffusion
+- Forward process: high masking ratio + phoneme-aware perturbations
+    - option --use_phoneme_perturber to enable
+    - option --perturber_k to control number of phonemically similar alternatives
+    - option --perturb_prob to control how many visible tokens get perturbed
+
+- Loss: cross-entropy on masked only by default, use --loss_on_perturbs to include perturbed tokens as well
+
 
 """
 
@@ -31,7 +37,7 @@ import os
 import jiwer
 from torch.utils.tensorboard import SummaryWriter
 from src.config import RANDOM_SEED
-from src.utils.perturb_phonemes import FastTokenizerAwarePhonemePerturber
+from src.utils.perturb_phonemes import PhonemePerturber
 
 import lightning as L
 from lightning.fabric.strategies import FSDPStrategy
@@ -50,22 +56,18 @@ from lit_gpt.diffmodel import TransEncoder, Block, Config
 from data.dataset_stage1 import create_stage1_dataloader
 from safetensors.torch import load_file
 from transformers import AutoTokenizer
-
+import json
 
 def forward_process(
-    batch,
-    mask_token_id: int,
-    mask_range=(0.7, 1.0),
-    perturber: Optional[FastTokenizerAwarePhonemePerturber] = None,
-    max_perturbed_words_per_sample: int = 2,
-    eps=1e-3,
-):
-    """
-    First randomly masks portions of the input batch.
-    Then applies phoneme perturbations only to visible tokens (if perturber is provided).
-    """
+        batch, 
+        mask_token_id: int, 
+        mask_range=(0.7, 1.0), 
+        eps=1e-3,
+        perturber: Optional[PhonemePerturber] = None,
+        perturb_prob: float = 0.3
+) -> Tuple[torch.Tensor, torch.BoolTensor, torch.BoolTensor]:
+    """Randomly masks input tokens, then optionally phonemically perturbs the remaining visible tokens."""
     b, l = batch.shape
-    original_batch = batch.clone()
 
     min_mask, max_mask = mask_range
     t = torch.rand((b,), device=batch.device)
@@ -74,46 +76,18 @@ def forward_process(
 
     p_mask = p_mask[:, None].repeat(1, l)
     mask_indices = torch.rand((b, l), device=batch.device) < p_mask
+    noisy_batch = torch.where(mask_indices, mask_token_id, batch)
 
-    perturb_stats = None
-    perturbed_batch_tensor = batch
-
-    if perturber is not None and max_perturbed_words_per_sample > 0:
-        original_device = batch.device
-        original_dtype = batch.dtype
-
-        visible_token_mask_batch = (~mask_indices).tolist()
-        perturbed_batch, batch_stats = perturber.perturb_tokenised_batch(
-            token_ids_batch=batch.tolist(),
-            visible_token_mask_batch=visible_token_mask_batch,
-            max_perturbed_words_per_sample=max_perturbed_words_per_sample,
-        )
-        perturbed_batch_tensor = torch.tensor(
-            perturbed_batch, device=original_device, dtype=original_dtype
+    perturb_indices = torch.zeros_like(mask_indices, dtype=torch.bool)
+    if perturber is not None:
+        noisy_batch, perturb_indices = perturber.perturb(
+            noisy_batch,
+            perturb_prob=perturb_prob,
+            mask_token_id=mask_token_id,
         )
 
-        token_changed = perturbed_batch_tensor != original_batch
-        seq_changed = token_changed.any(dim=1)
-        visible_changed = token_changed & (~mask_indices)
+    return noisy_batch, mask_indices, perturb_indices
 
-        perturb_stats = {
-            "seq_hit_rate": seq_changed.float().mean().item(),
-            "token_hit_rate": token_changed.float().mean().item(),
-            "visible_perturbed_token_rate": visible_changed.float().mean().item(),
-            "visible_perturbed_tokens_total": int(visible_changed.sum().item()),
-            "changed_sequences": int(seq_changed.sum().item()),
-            "total_sequences": int(b),
-            "changed_tokens": int(token_changed.sum().item()),
-            "total_tokens": int(b * l),
-            "visible_tokens_total": int((~mask_indices).sum().item()),
-            "eligible_words": int(batch_stats.get("eligible_words", 0)),
-            "attempted_words": int(batch_stats.get("attempted_words", 0)),
-            "changed_words": int(batch_stats.get("changed_words", 0)),
-            "length_preserved_sequences": int(batch_stats.get("length_preserved_sequences", 0)),
-        }
-
-    noisy_batch = torch.where(mask_indices, mask_token_id, perturbed_batch_tensor)
-    return noisy_batch, mask_indices, perturb_stats
 
 @torch.no_grad()
 def validate(fabric: L.Fabric, model: torch.nn.Module, val_dataloader: DataLoader, 
@@ -259,7 +233,7 @@ def setup(args):
     """Sets up Lightning Fabric and starts training."""
     out_dir = Path(args.out_dir)
 
-    if not args.resume:
+    if not args.resume and not args.trial_name:
         if not out_dir.name.startswith(f"ft2-{args.model_name}-"):
             out_dir = out_dir / f"ft2-{args.model_name}-{int(time.time())}"
 
@@ -294,6 +268,13 @@ def main(fabric: L.Fabric, args, out_dir: Path):
         out_dir.mkdir(parents=True, exist_ok=True)
         fabric.print(f"Stage 2 fine-tuning - Output directory: {out_dir}")
         fabric.print("==> Training full model weights (Full fine-tuning)")
+        if args.trial_name:
+            fabric.print(f"Trial name: {args.trial_name}")
+
+        args_dict = vars(args).copy()
+        args_dict["resolved_out_dir"] = str(out_dir)
+        with open(out_dir / "training_config.json", "w") as f:
+            json.dump(args_dict, f, indent=2, default=str)
     
     fabric.barrier()
     
@@ -302,7 +283,15 @@ def main(fabric: L.Fabric, args, out_dir: Path):
     
     # Initialize tokenizer for WER/CER calculation
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
-    
+    perturber = None
+    if args.use_phoneme_perturber:
+        perturber = PhonemePerturber(
+            tokenizer=tokenizer,
+            k=args.perturber_k,
+            cache_dir=args.perturber_cache_dir,
+        )
+        perturber.to(fabric.device)
+
     # Prepare dataloaders
     device_batch_size = args.batch_size // fabric.world_size
     val_batch_size = max(16, device_batch_size // 2)
@@ -528,26 +517,6 @@ def main(fabric: L.Fabric, args, out_dir: Path):
     effective_steps_per_epoch = steps_per_epoch // args.gradient_accumulation_steps
     total_effective_steps = args.epochs * effective_steps_per_epoch
 
-    perturber = None
-    if args.max_perturbed_words_per_sample > 0:
-        perturber = FastTokenizerAwarePhonemePerturber(
-            tokenizer_name=args.tokenizer_name,
-            seed=RANDOM_SEED,
-            max_char_delta=args.perturb_max_char_delta,
-            max_phoneme_distance=args.perturb_phoneme_distance,
-            top_k_neighbors=args.perturb_top_k_neighbors,
-            cache_dir=args.perturb_cache_dir,
-            use_cache=args.use_perturb_cache,
-        )
-        if fabric.global_rank == 0:
-            fabric.print(
-                "Applying phoneme perturbations to visible words only | "
-                f"max_words_per_sample={args.max_perturbed_words_per_sample}, "
-                f"phoneme_distance<={args.perturb_phoneme_distance}, "
-                f"top_k={args.perturb_top_k_neighbors}, "
-                f"cache={'on' if args.use_perturb_cache else 'off'}"
-            )
-    
     # Stage 2 uses smoother scheduling
     if args.scheduler_type == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -612,7 +581,7 @@ def main(fabric: L.Fabric, args, out_dir: Path):
     
     loss_func = torch.nn.CrossEntropyLoss()
     
-    # State dict for checkpointing
+    # for checkpointing
     state = {
         "model": model,
         "optimizer": optimizer,
@@ -620,7 +589,10 @@ def main(fabric: L.Fabric, args, out_dir: Path):
         "epoch": 0,
         "best_val_loss": float('inf'),
         "best_val_wer": float('inf'),
-        "patience_counter": 0
+        "best_val_cer": float('inf'),
+        "best_epoch": 0,
+        "stopped_epoch": 0,
+        "patience_counter": 0,
     }
     
     if ema is not None:
@@ -651,7 +623,13 @@ def main(fabric: L.Fabric, args, out_dir: Path):
         fabric.print(f"Scaled learning rate: {scaled_lr}")
         fabric.print(f"Weight decay: {args.weight_decay}")
         fabric.print(f"Gradient clipping: {args.gradient_clip_val}")
-    
+
+        fabric.print(f"Perturbations: {'enabled' if perturber is not None else 'disabled'}")
+        if perturber is not None:
+            fabric.print(f"  Perturbation probability: {args.perturb_prob}")
+            fabric.print(f"  Perturber k: {args.perturber_k}")
+            fabric.print(f"  Include perturbed tokens in loss: {'yes' if args.include_perturb_in_loss else 'no'}")
+
     # Clear GPU memory
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -693,17 +671,18 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             # Convert BF16 to FP32 if needed
             if condition.dtype == torch.bfloat16:
                 condition = condition.float()
-            
-            noisy_input, mask_indices, perturb_stats = forward_process(
+
+            noisy_input, mask_indices, perturb_indices = forward_process(
                 target_ids,
                 mask_token_id=config.padded_vocab_size,
                 mask_range=(args.min_mask_ratio, args.max_mask_ratio),
                 perturber=perturber,
-                max_perturbed_words_per_sample=args.max_perturbed_words_per_sample,
+                perturb_prob=args.perturb_prob,
             )
             
             logits = model(idx=noisy_input, condition=condition)
-            loss = loss_func(logits[mask_indices], target_ids[mask_indices])
+            loss_mask = mask_indices | perturb_indices if args.include_perturb_in_loss else mask_indices
+            loss = loss_func(logits[loss_mask], target_ids[loss_mask])
             
             # Scale loss for gradient accumulation
             loss = loss / accumulation_steps
@@ -727,33 +706,17 @@ def main(fabric: L.Fabric, args, out_dir: Path):
                 
             # Record loss
             all_losses.append(loss.item() * accumulation_steps)
-            if perturb_stats is not None:
-                epoch_perturb["visible_perturbed_tokens_total"] += perturb_stats["visible_perturbed_tokens_total"]
-                epoch_perturb["visible_tokens_total"] += perturb_stats["visible_tokens_total"]
-                epoch_perturb["changed_sequences"] += perturb_stats["changed_sequences"]
-                epoch_perturb["total_sequences"] += perturb_stats["total_sequences"]
-                epoch_perturb["attempted_words"] += perturb_stats["attempted_words"]
-                epoch_perturb["changed_words"] += perturb_stats["changed_words"]
             
             # Periodic logging
             if (batch_idx + 1) % log_interval == 0:
                 recent_losses = all_losses[-log_interval:]
                 avg_loss = sum(recent_losses) / len(recent_losses)
                 current_lr = scheduler.get_last_lr()[0]
-
-                if perturb_stats is not None:
-                    visible_rate = perturb_stats["visible_perturbed_token_rate"]
-                    seq_hit = perturb_stats["seq_hit_rate"]
-                else:
-                    visible_rate = 0.0
-                    seq_hit = 0.0
                 
                 if fabric.global_rank == 0 and hasattr(progress_bar, 'set_postfix'):
                     progress_bar.set_postfix(
                         loss=avg_loss,
                         lr=current_lr,
-                        pert_tok=f"{visible_rate:.3f}",
-                        pert_seq=f"{seq_hit:.3f}",
                     )        
         # Update scheduler per epoch
         if not scheduler_step_on_batch:
@@ -831,12 +794,12 @@ def main(fabric: L.Fabric, args, out_dir: Path):
                 current_metric = val_loss
                 best_metric = state["best_val_loss"]
                 metric_name = "validation loss"
-            
+                        
             if current_metric < best_metric:
-                if args.early_stop_metric == 'wer':
-                    state["best_val_wer"] = current_metric
-                else:
-                    state["best_val_loss"] = current_metric
+                state["best_val_loss"] = val_loss
+                state["best_val_wer"] = val_wer
+                state["best_val_cer"] = val_cer
+                state["best_epoch"] = epoch + 1
                 state["patience_counter"] = 0
                 save_best = torch.tensor(True, device=fabric.device)
                 
@@ -882,10 +845,11 @@ def main(fabric: L.Fabric, args, out_dir: Path):
         
         # Save last checkpoint
         state["epoch"] = epoch + 1
+        state["stopped_epoch"] = epoch + 1
         fabric.save(out_dir / "last.ckpt", state)
         
         # Periodic checkpoint saving
-        if (epoch + 1) % args.save_every_n_epochs == 0:
+        if args.save_every_n_epochs > 0 and (epoch + 1) % args.save_every_n_epochs == 0:
             epoch_save_path = out_dir / f"checkpoint_epoch_{epoch+1}.ckpt"
             fabric.save(epoch_save_path, state)
             if fabric.global_rank == 0:
@@ -908,41 +872,71 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             fabric.print(f"Best validation WER: {state['best_val_wer']:.4f}")
         else:
             fabric.print(f"Best validation loss: {state['best_val_loss']:.4f}")
+        
+        model_best_path = out_dir / "model_best.pt"
+        model_best_ema_path = out_dir / "model_best_ema.pt"
+
+        final_metrics = {
+            "status": "completed",
+            "trial_name": args.trial_name,
+            "resolved_out_dir": str(out_dir),
+
+            "selection_metric": args.early_stop_metric,
+            "best_val_loss": state["best_val_loss"],
+            "best_val_wer": state["best_val_wer"],
+            "best_val_cer": state["best_val_cer"],
+            "best_epoch": state["best_epoch"],
+            "stopped_epoch": state["stopped_epoch"],
+
+            "base_model_path": args.base_model_path,
+            "pretrain_path": args.pretrain_path,
+            "out_model_name": args.out_model_name,
+            "model_name": args.model_name,
+            "tokenizer_name": args.tokenizer_name,
+
+            "learning_rate": args.learning_rate,
+            "scaled_learning_rate": scaled_lr,
+            "second_stage_lr_multiplier": args.second_stage_lr_multiplier,
+            "weight_decay": args.weight_decay,
+            "scheduler_type": args.scheduler_type,
+            "warmup_ratio": args.warmup_ratio,
+
+            "batch_size": args.batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "epochs_requested": args.epochs,
+            "patience": args.patience,
+
+            "used_perturbation_train": bool(args.use_phoneme_perturber),
+            "used_perturbation_val": False,
+            "perturb_prob": args.perturb_prob,
+            "include_perturb_in_loss": bool(args.include_perturb_in_loss),
+            "perturber_k": args.perturber_k,
+
+            "min_mask_ratio": args.min_mask_ratio,
+            "max_mask_ratio": args.max_mask_ratio,
+            "mask_range": [args.min_mask_ratio, args.max_mask_ratio],
+
+            "compute_wer_cer": bool(args.compute_wer_cer),
+            "use_ema": bool(args.use_ema and EMA_AVAILABLE),
+            "model_best_path": str(model_best_path) if model_best_path.exists() else None,
+            "model_best_ema_path": str(model_best_ema_path) if model_best_ema_path.exists() else None,
+            "last_checkpoint_path": str(out_dir / "last.ckpt"),
+        }
+        with open(out_dir / "final_metrics.json", "w") as f:
+            json.dump(final_metrics, f, indent=2)
+
+        fabric.print(f"Summary: {out_dir}/final_metrics.json")
+        
+        
+        best_model_path = out_dir / "model_best.pt"
+        if best_model_path.exists():
+            final_save_path = out_dir.parent / f"{args.out_model_name}_stage2_decoder.pt"
+            shutil.copy2(best_model_path, final_save_path)
+            fabric.print(f"Best model saved to: {final_save_path}")
+        else:
+            fabric.print("Warning: model_best.pt was not found; skipping promoted model copy.")
 
 
-        import json
-        args_dict = vars(args)
-        with open(out_dir / "training_config.json", "w") as f:
-            json.dump(args_dict, f, indent=2, default=str)
-        
-        # Human-readable summary
-        with open(out_dir / "run_summary.txt", "w") as f:
-            f.write("WhisFusion Experiment 1: Phoneme Perturb + High-Mask Stage 2\n")
-            f.write("="*60 + "\n\n")
-            f.write(f"Base model: {args.base_model_path}\n")
-            f.write(f"Output dir: {out_dir}\n")
-            f.write(f"Max perturbed words/sample: {args.max_perturbed_words_per_sample}\n")
-            f.write(f"Phoneme distance threshold: {args.perturb_phoneme_distance}\n")
-            f.write(f"Top-k neighbors: {args.perturb_top_k_neighbors}\n")
-            f.write(f"Perturb cache dir: {args.perturb_cache_dir}\n")
-            f.write(f"Perturb cache disabled: {args.disable_perturb_cache}\n")
-            f.write(f"Mask range: {args.min_mask_ratio}-{args.max_mask_ratio}\n")
-            f.write(f"Batch size: {args.batch_size}\n")
-            f.write(f"LR: {args.learning_rate} (scaled: {scaled_lr:.2e})\n")
-            f.write(f"Epochs: {args.epochs}\n")
-            f.write(f"Pretrain: {args.pretrain_path}\n\n")
-            f.write("Full args:\n")
-            for k, v in sorted(args_dict.items()):
-                f.write(f"  {k}: {v}\n")
-        
-        fabric.print(f"Config dumped: {out_dir}/training_config.json")
-        fabric.print(f"Summary: {out_dir}/run_summary.txt")
-        
-        
-        final_save_path = out_dir.parent / f"{args.out_model_name}_stage2_decoder.pt"
-        shutil.copy2(out_dir / "model_best.pt", final_save_path)
-        fabric.print(f"Best model saved to: {out_dir.parent / f'{args.out_model_name}_stage2_decoder.pt'}")
-        
         fabric.print("\nStage 2 fine-tuning complete!")
         # Close TensorBoard writer
         if writer is not None:
@@ -970,6 +964,8 @@ if __name__ == "__main__":
                         default="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
     
     # Training hyperparameters (Stage 2 defaults)
+    parser.add_argument('--trial_name', type=str, default=None,
+                    help='Optional trial identifier for tuning/search runs')
     parser.add_argument('--batch_size', type=int, default=32, 
                         help='Total batch size across all GPUs')
     parser.add_argument('--epochs', type=int, default=20)
@@ -983,18 +979,16 @@ if __name__ == "__main__":
     parser.add_argument('--scheduler_type', type=str, default="cosine", 
                         choices=["cosine", "cosine_epoch", "constant_with_warmup"], 
                         help="Scheduler type")
-    parser.add_argument('--max_perturbed_words_per_sample', type=int, default=2,
-                        help='Maximum number of visible words to phoneme-perturb per sample (0 disables perturbation)')
-    parser.add_argument('--perturb_phoneme_distance', type=int, default=3,
-                        help='Maximum word-level phoneme edit distance for candidate neighbors')
-    parser.add_argument('--perturb_top_k_neighbors', type=int, default=5,
-                        help='Maximum number of cached neighbor words per source word')
-    parser.add_argument('--perturb_max_char_delta', type=int, default=2,
-                        help='Maximum absolute character-length difference between source and replacement word')
-    parser.add_argument('--perturb_cache_dir', type=str, default='output/phoneme_perturb_cache',
-                        help='Directory for CPU-side phoneme neighbor graph cache')
-    parser.add_argument('--use_perturb_cache', action='store_true',
-                        help='Enable loading/saving the phoneme neighbor graph cache')
+    parser.add_argument('--use_phoneme_perturber', action='store_true',
+                        help='Enable phoneme-based perturbation in forward noising')
+    parser.add_argument('--perturb_prob', type=float, default=0.3,
+                        help='Probability of phoneme perturbation for visible tokens')
+    parser.add_argument('--include_perturb_in_loss', action='store_true',
+                        help='Include perturbed tokens in the training loss')
+    parser.add_argument('--perturber_k', type=int, default=10,
+                        help='Number of phonemic neighbours per token')
+    parser.add_argument('--perturber_cache_dir', type=str, default='src/utils/cache',
+                        help='Cache directory for phoneme perturber')
 
     # Layer-wise learning rate decay
     parser.add_argument('--use_layer_wise_lr_decay', action='store_true',

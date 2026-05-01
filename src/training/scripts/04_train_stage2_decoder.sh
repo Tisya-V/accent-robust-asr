@@ -57,7 +57,7 @@ PY
 # srun bash -c 'echo "host=$(hostname) rank=$SLURM_PROCID localid=$SLURM_LOCALID cuda=$CUDA_VISIBLE_DEVICES"'
 echo -e "\n\n==============================\n\n"
 
-echo "Starting Stage 2: Decoder Specialization (High Mask Ratio)..."
+echo "Starting Stage 2: Decoder Specialization (High Mask Ratio, With Perturbations)..."
 
 fabric run src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py \
    --strategy=ddp \
@@ -66,10 +66,14 @@ fabric run src/training/src/training/train_stage2_decoder_high_ratio_with_pertur
    --val_data_dir   data/processed/dev/ \
    --pretrain_path  models/whisfusion_ft/stage1_adapter/stage1_adapter.pt\
    --base_model_path models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors \
-   --out_dir        models/whisfusion_with_perturbs0.7/stage2_decoder_high_ratio \
+   --out_dir        models/whisfusion_with_perturbs/stage2_decoder_high_ratio \
    --model_name     Diff_LLaMA_170M \
    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T \
-   --perturb_prob 0.0 \
+   --use_phoneme_perturber \
+   --perturb_prob 0.3 \
+   --include_perturb_in_loss \
+   --perturber_k 10 \
+   --perturber_cache_dir src/utils/cache \
    --num_devices 3              \
    --batch_size 48             \
    --gradient_accumulation_steps 2 \

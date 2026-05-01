@@ -17,6 +17,8 @@ NUM_PHON_FEATURES    int
 PHON_FEATURE_MATRIX  np.ndarray (39, F)     float32, from panphon
 phone_to_features(p)              -> np.ndarray (F,)
 phones_to_feature_matrix(phones)  -> np.ndarray (N, F)
+feature_edit_distance(mat_i, mat_j, indel_cost) -> float
+
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from __future__ import annotations
 import panphon
 from phonecodes import phonecodes
 import numpy as np
+import numba
+
 
 # ---------------------------------------------------------------------------
 # ARPAbet vocabulary — 39 phones, silence excluded
@@ -90,3 +94,51 @@ def phones_to_feature_matrix(phones: list[str]) -> np.ndarray:
         if p in PHONE2ID:
             out[i] = PHON_FEATURE_MATRIX[PHONE2ID[p]]
     return out
+
+
+@numba.njit(cache=True)
+def feature_edit_distance(
+    mat_i: np.ndarray,   # (Li, F) float32
+    mat_j: np.ndarray,   # (Lj, F) float32
+    indel_cost: float = 0.5,
+) -> float:
+    """
+    Articulatory feature edit distance between two phoneme sequences.
+
+    Each row of mat_i / mat_j is a feature vector for one phoneme
+    (from phones_to_feature_matrix). Substitution cost between two
+    phonemes is their mean absolute feature difference, normalised to
+    [0, 1]. Insertion / deletion cost is fixed at indel_cost.
+
+    Returns a non-negative float. Lower = more phonemically similar.
+    """
+    Li = mat_i.shape[0]
+    Lj = mat_j.shape[0]
+    F  = mat_i.shape[1]
+
+    # Allocate DP table
+    dp = np.zeros((Li + 1, Lj + 1), dtype=np.float32)
+
+    # Base cases: aligning against empty sequence = all indels
+    for a in range(Li + 1):
+        dp[a, 0] = a * indel_cost
+    for b in range(Lj + 1):
+        dp[0, b] = b * indel_cost
+
+    # Fill DP table
+    for a in range(1, Li + 1):
+        for b in range(1, Lj + 1):
+            # Mean absolute feature difference, normalised to [0, 1]
+            # Divide by F to get mean, divide by 2 because max |diff| = 2 (i.e. -1 vs +1)
+            sub = 0.0
+            for f in range(F):
+                sub += abs(mat_i[a - 1, f] - mat_j[b - 1, f])
+            sub = (sub / F) / 2.0
+
+            dp[a, b] = min(
+                dp[a - 1, b]     + indel_cost,   # deletion
+                dp[a, b - 1]     + indel_cost,   # insertion
+                dp[a - 1, b - 1] + sub,          # substitution
+            )
+
+    return dp[Li, Lj]

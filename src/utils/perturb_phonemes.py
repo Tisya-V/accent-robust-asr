@@ -1,411 +1,298 @@
+"""
+src/utils/phoneme_perturber.py
+
+Builds and caches a token-level phonemic neighbour table for Whisfusion.
+Step 3: cache builder only.
+"""
+
 from __future__ import annotations
 
-import hashlib
-import json
-import pickle
-import random
+import logging
 import re
+import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
-import pronouncing
-from transformers import AutoTokenizer
+import nltk
+import torch
+from tqdm.auto import tqdm
+from transformers import PreTrainedTokenizerBase
 
-from src.config import RANDOM_SEED
+from src.utils.phonology import ARPABET_VOCAB, phones_to_feature_matrix, feature_edit_distance
 
-
-EXAMPLE_TEXTS = [
-    "Author of the danger trail Philip Steels etc",
-    "Lord but I'm glad to see you again Phil",
-    "You used to joy ride like the very devil.",
-]
-
-TOKENIZER_NAME = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
-DEFAULT_MAX_CHAR_DELTA = 2
-DEFAULT_MAX_PHONEME_DISTANCE = 3
-DEFAULT_TOP_K_NEIGHBORS = 5
-DEFAULT_MAX_PERTURBED_WORDS_PER_SAMPLE = 2
+logger = logging.getLogger(__name__)
+PHONE_SET = set(ARPABET_VOCAB)
 
 
-class FastTokenizerAwarePhonemePerturber:
+class PhonemePerturber:
     def __init__(
         self,
-        tokenizer_name: str,
-        confusion_map: Optional[Dict[str, Sequence[str]]] = None,
-        seed: int = RANDOM_SEED,
-        max_char_delta: int = DEFAULT_MAX_CHAR_DELTA,
-        max_phoneme_distance: int = DEFAULT_MAX_PHONEME_DISTANCE,
-        top_k_neighbors: int = DEFAULT_TOP_K_NEIGHBORS,
-        cache_dir: Optional[str] = None,
-        use_cache: bool = True,
+        tokenizer: PreTrainedTokenizerBase,
+        k: int = 10,
+        cache_dir: str = "src/utils/cache",
+        length_bucket_threshold: int = 3,
+        min_word_length: int = 2,
     ):
-        print("Initializing FastTokenizerAwarePhonemePerturber...")
-        self.tokenizer_name = tokenizer_name
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        pronouncing.init_cmu()
-        self.rng = random.Random(seed)
-        self.confusion_map = {
-            k: tuple(v) for k, v in (confusion_map or self.default_confusion_map()).items()
-        }
-        self.max_char_delta = max_char_delta
-        self.max_phoneme_distance = max_phoneme_distance
-        self.top_k_neighbors = top_k_neighbors
-        self.use_cache = use_cache
-        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
+        logger.info(f"Initializing PhonemePerturber with tokenizer={tokenizer} k={k} cache_dir={cache_dir} length_bucket_threshold={length_bucket_threshold} min_word_length={min_word_length}")
+        self.tokenizer = tokenizer
+        self.k = k
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.length_bucket_threshold = length_bucket_threshold
+        self.min_word_length = min_word_length
+        self.vocab_size = tokenizer.vocab_size
+        self.tokenizer_name = getattr(tokenizer, "name_or_path", "tokenizer")
+        self.cache_path = self._cache_path()
+        self.special_ids = {x for x in [tokenizer.pad_token_id, tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.unk_token_id, getattr(tokenizer, "mask_token_id", None)] if x is not None}
 
-        self.lexicon = self._build_fast_lexicon()
-        self.by_token_len = self._group_by_token_len()
-        self.neighbor_graph = self._load_or_build_neighbor_graph()
+        self.cmudict = self._load_cmudict()
+        self.neighbour_table = None
+        self.phonemisable_count = 0
+        self.phonemisable_tokens = {}
+        self.feature_matrices = {}
 
-        print(
-            f"Built lexicon with {len(self.lexicon)} entries, "
-            f"grouped into {len(self.by_token_len)} token length buckets."
+        t0 = time.time()
+        if self.cache_path.exists():
+            logger.info(f"Loading phoneme neighbour table from cache: {self.cache_path}")
+            payload = torch.load(self.cache_path, map_location="cpu")
+            self.neighbour_table = payload["neighbour_table"]
+            self.phonemisable_count = payload.get("phonemisable_count", 0)
+            self.phonemisable_tokens = payload.get("phonemisable_tokens", {})
+            logger.info("Loaded phoneme neighbour table from %s", self.cache_path)
+            return
+
+        logger.info(f"No cache found at {self.cache_path}. Building phoneme neighbour table from scratch...")
+        logger.info("Step 1/3: Building phonemisable token index...")
+        self._build_phonemisable_index()
+        logger.info("Step 2/3: Building phoneme feature matrices...")
+        self._build_feature_matrices()
+        logger.info("Step 3/3: Building phoneme neighbour table...")
+        self.neighbour_table = self._build_neighbour_table()
+        torch.save(
+            {
+                "neighbour_table": self.neighbour_table,
+                "phonemisable_count": self.phonemisable_count,
+                "phonemisable_tokens": self.phonemisable_tokens,
+                "tokenizer_name": self.tokenizer_name,
+                "k": self.k,
+                "length_bucket_threshold": self.length_bucket_threshold,
+                "min_word_length": self.min_word_length,
+                "built_at": time.time(),
+            },
+            self.cache_path,
         )
-        print(
-            f"Built perturb graph for {len(self.neighbor_graph)} words "
-            f"(top_k={self.top_k_neighbors}, max_phoneme_distance={self.max_phoneme_distance}, "
-            f"max_char_delta={self.max_char_delta})."
+        logger.info(
+            "Built phoneme neighbour table: %d phonemisable tokens / %d vocab tokens in %.1fs",
+            self.phonemisable_count,
+            self.vocab_size,
+            time.time() - t0,
         )
+        logger.info(f"Cache saved to {self.cache_path}")
 
-    @staticmethod
-    def default_confusion_map() -> Dict[str, Sequence[str]]:
-        return {
-            "TH": ["S", "T", "F"],
-            "DH": ["D", "Z", "V"],
-            "V": ["B", "F", "W"],
-            "B": ["V", "P"],
-            "R": ["L", "W"],
-            "L": ["R"],
-            "SH": ["S", "CH"],
-            "S": ["TH", "SH", "Z"],
-            "Z": ["S", "DH"],
-            "F": ["TH", "V"],
-            "T": ["TH", "D"],
-            "D": ["DH", "T"],
-            "IH": ["IY", "EH"],
-            "IY": ["IH"],
-            "UH": ["UW", "AH"],
-            "UW": ["UH"],
-            "AA": ["AO", "AH"],
-            "AO": ["AA", "OW"],
-            "EH": ["IH", "AE"],
-            "AE": ["EH", "AH"],
-            "ER": ["AH", "AO"],
-            "OW": ["AO", "UH"],
-            "G": ["K"],
-            "K": ["G"],
-            "P": ["B"],
-        }
+    def _cache_path(self) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", self.tokenizer_name)
+        return self.cache_dir / f"phoneme_neighbours_{safe}_k{self.k}.pt"
 
-    def _cache_key(self) -> str:
-        payload = {
-            "tokenizer_name": self.tokenizer_name,
-            "max_char_delta": self.max_char_delta,
-            "max_phoneme_distance": self.max_phoneme_distance,
-            "top_k_neighbors": self.top_k_neighbors,
-            "confusion_map": {k: list(v) for k, v in sorted(self.confusion_map.items())},
-            "version": 1,
-        }
-        digest = hashlib.md5(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-        return f"phoneme_neighbors_{digest}.pkl"
+    def _load_cmudict(self):
+        try:
+            return nltk.corpus.cmudict.dict()
+        except LookupError:
+            nltk.download("cmudict", quiet=True)
+            return nltk.corpus.cmudict.dict()
 
-    def _cache_path(self) -> Optional[Path]:
-        if self.cache_dir is None:
+    def _token_to_word(self, token_id: int):
+        raw = self.tokenizer.convert_ids_to_tokens([token_id])[0]
+        if not raw.startswith("▁"):
             return None
-        return self.cache_dir / self._cache_key()
+        word = raw[1:].strip().lower()
+        if len(word) < self.min_word_length:
+            return None
+        if not word.isalpha():
+            return None
+        return word
 
-    def _load_or_build_neighbor_graph(self) -> Dict[str, List[str]]:
-        cache_path = self._cache_path()
-        if self.use_cache and cache_path is not None and cache_path.exists():
-            print(f"Loading perturb graph from cache: {cache_path}")
-            with open(cache_path, "rb") as f:
-                return pickle.load(f)
-
-        print("Building perturb graph from scratch...")
-        graph = self._build_neighbor_graph()
-
-        if self.use_cache and cache_path is not None:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "wb") as f:
-                pickle.dump(graph, f, protocol=pickle.HIGHEST_PROTOCOL)
-            print(f"Saved perturb graph cache to: {cache_path}")
-
-        return graph
-
-    def _strip_stress(self, phones: str) -> Tuple[str, ...]:
-        return tuple(re.sub(r"[012]", "", p) for p in phones.split())
-
-    def _build_fast_lexicon(self) -> Dict[str, Dict]:
-        lex = {}
-        for raw_word, phones_list in pronouncing.lookup.items():
-            word = raw_word.lower()
-            if "(" in word or not re.fullmatch(r"[a-z']+", word):
+    def _build_phonemisable_index(self):
+        phonemisable = {}
+        for token_id in tqdm(range(self.vocab_size), desc="Scanning vocab", leave=False):
+            if token_id in self.special_ids:
                 continue
-            if not phones_list:
+            word = self._token_to_word(token_id)
+            if word is None:
                 continue
-            arpabet = self._strip_stress(phones_list[0])
-            token_len = len(self.text_to_ids(" " + word))
-            lex[word] = {
-                "arpabet": arpabet,
-                "char_len": len(word),
-                "token_len": token_len,
-            }
-        return lex
-
-    def _group_by_token_len(self) -> Dict[int, List[str]]:
-        grouped = defaultdict(list)
-        for word, info in self.lexicon.items():
-            grouped[info["token_len"]].append(word)
-        return dict(grouped)
-
-    def _build_neighbor_graph(self) -> Dict[str, List[str]]:
-        graph: Dict[str, List[str]] = {}
-
-        for token_len, words in self.by_token_len.items():
-            for word in words:
-                src_info = self.lexicon[word]
-                candidates = []
-
-                for cand in words:
-                    if cand == word:
-                        continue
-
-                    cand_info = self.lexicon[cand]
-                    if abs(cand_info["char_len"] - src_info["char_len"]) > self.max_char_delta:
-                        continue
-
-                    dist = self.phoneme_edit_distance(
-                        src_info["arpabet"],
-                        cand_info["arpabet"],
-                        max_distance=self.max_phoneme_distance,
-                    )
-                    if dist > self.max_phoneme_distance:
-                        continue
-
-                    candidates.append((dist, abs(cand_info["char_len"] - src_info["char_len"]), cand))
-
-                candidates.sort(key=lambda x: (x[0], x[1], x[2]))
-                graph[word] = [cand for _, _, cand in candidates[: self.top_k_neighbors]]
-
-        return graph
-
-    def ids_to_text(self, token_ids: List[int]) -> str:
-        return self.tokenizer.decode(token_ids, skip_special_tokens=False)
-
-    def text_to_ids(self, text: str) -> List[int]:
-        return self.tokenizer.encode(text, add_special_tokens=False)
-
-    @staticmethod
-    def phoneme_edit_distance(a: Sequence[str], b: Sequence[str], max_distance: int) -> int:
-        m, n = len(a), len(b)
-        if abs(m - n) > max_distance:
-            return max_distance + 1
-
-        dp = [[0] * (n + 1) for _ in range(m + 1)]
-        for i in range(m + 1):
-            dp[i][0] = i
-        for j in range(n + 1):
-            dp[0][j] = j
-
-        for i in range(1, m + 1):
-            row_min = max_distance + 1
-            for j in range(1, n + 1):
-                cost = 0 if a[i - 1] == b[j - 1] else 1
-                dp[i][j] = min(
-                    dp[i - 1][j] + 1,
-                    dp[i][j - 1] + 1,
-                    dp[i - 1][j - 1] + cost,
-                )
-                row_min = min(row_min, dp[i][j])
-            if row_min > max_distance:
-                return max_distance + 1
-        return dp[m][n]
-
-    @staticmethod
-    def _match_case(src: str, dst: str) -> str:
-        if src.isupper():
-            return dst.upper()
-        if src[:1].isupper():
-            return dst.capitalize()
-        return dst
-
-    @staticmethod
-    def _is_word(part: str) -> bool:
-        return re.fullmatch(r"[A-Za-z']+", part) is not None
-
-    def _parts_and_offsets(self, text: str) -> Tuple[List[str], List[Tuple[int, int]]]:
-        parts = re.findall(r"[A-Za-z']+|[^A-Za-z'\s]+|\s+", text)
-        offsets = []
-        cursor = 0
-        for part in parts:
-            start = cursor
-            end = cursor + len(part)
-            offsets.append((start, end))
-            cursor = end
-        return parts, offsets
-
-    def _char_span_visible(
-        self,
-        char_start: int,
-        char_end: int,
-        token_offsets: List[Tuple[int, int]],
-        visible_mask: List[bool],
-    ) -> bool:
-        touched = False
-        for (tok_start, tok_end), is_visible in zip(token_offsets, visible_mask):
-            if tok_end <= char_start or tok_start >= char_end:
+            prons = self.cmudict.get(word)
+            if not prons:
                 continue
-            touched = True
-            if not is_visible:
-                return False
-        return touched
+            phones = [p.rstrip("012") for p in prons[0] if p.rstrip("012") in PHONE_SET]
+            if phones:
+                phonemisable[token_id] = phones
+        self.phonemisable_tokens = phonemisable
+        self.phonemisable_count = len(phonemisable)
 
-    def perturb_tokenized_sentence(
-        self,
-        token_ids: List[int],
-        visible_token_mask: Optional[List[bool]] = None,
-        max_perturbed_words: int = DEFAULT_MAX_PERTURBED_WORDS_PER_SAMPLE,
-    ) -> Tuple[List[int], str, str, Dict[str, int]]:
-        text = self.ids_to_text(token_ids)
-        parts, offsets = self._parts_and_offsets(text)
+    def _build_feature_matrices(self):
+        feats = {}
+        for token_id, phones in tqdm(self.phonemisable_tokens.items(), desc="Building feature matrices", leave=False):
+            feats[token_id] = phones_to_feature_matrix(phones)
+        self.feature_matrices = feats
 
-        if visible_token_mask is None:
-            visible_token_mask = [True] * len(token_ids)
+    def _build_neighbour_table(self):
+        length_buckets = defaultdict(list)
+        for token_id, phones in self.phonemisable_tokens.items():
+            length_buckets[len(phones)].append(token_id)
 
-        token_offsets = self.tokenizer(
-            text,
-            add_special_tokens=False,
-            return_offsets_mapping=True,
-        )["offset_mapping"]
+        table = torch.full((self.vocab_size, self.k), -1, dtype=torch.int32)
+        lengths = sorted(length_buckets)
 
-        eligible_indices = []
-        for idx, part in enumerate(parts):
-            if not self._is_word(part):
+        for len_i in tqdm(lengths, desc="Length buckets", leave=False):
+            bucket_i = length_buckets[len_i]
+            candidate_js = []
+            for len_j in lengths:
+                if abs(len_i - len_j) <= self.length_bucket_threshold:
+                    candidate_js.extend(length_buckets[len_j])
+            candidate_js = [j for j in candidate_js if j not in bucket_i]
+            if not candidate_js:
                 continue
 
-            lower = part.lower()
-            if lower not in self.lexicon:
-                continue
-            if not self.neighbor_graph.get(lower):
-                continue
+            by_source = defaultdict(list)
+            pairs = [(src, dst) for src in bucket_i for dst in candidate_js]
+            for start in tqdm(range(0, len(pairs), 256), desc=f"Distances len={len_i}", leave=False):
+                chunk = pairs[start:start + 256]
+                for src, dst in chunk:
+                    dist = feature_edit_distance(self.feature_matrices[src], self.feature_matrices[dst])
+                    by_source[src].append((dst, float(dist)))
 
-            char_start, char_end = offsets[idx]
-            if self._char_span_visible(char_start, char_end, token_offsets, visible_token_mask):
-                eligible_indices.append(idx)
+            for src in bucket_i:
+                items = sorted(by_source.get(src, []), key=lambda x: x[1])
+                if not items:
+                    continue
+                neigh = [dst for dst, _ in items[: self.k]]
+                while len(neigh) < self.k:
+                    neigh.append(neigh[-1])
+                table[src] = torch.tensor(neigh[: self.k], dtype=torch.int32)
 
-        self.rng.shuffle(eligible_indices)
-        chosen_indices = set(eligible_indices[:max_perturbed_words])
+        return table
 
-        new_parts = []
-        changed_words = 0
-        attempted_words = len(chosen_indices)
-
-        for idx, part in enumerate(parts):
-            if idx not in chosen_indices:
-                new_parts.append(part)
-                continue
-
-            lower = part.lower()
-            neighbors = self.neighbor_graph.get(lower, [])
-            if not neighbors:
-                new_parts.append(part)
-                continue
-
-            replacement = self._match_case(part, self.rng.choice(neighbors))
-            if replacement != part:
-                changed_words += 1
-            new_parts.append(replacement)
-
-        perturbed_text = "".join(new_parts)
-        perturbed_ids = self.text_to_ids(perturbed_text)
-
-        if len(perturbed_ids) != len(token_ids):
-            return token_ids, text, text, {
-                "eligible_words": len(eligible_indices),
-                "attempted_words": attempted_words,
-                "changed_words": 0,
-                "token_length_preserved": 0,
-            }
-
-        return perturbed_ids, text, perturbed_text, {
-            "eligible_words": len(eligible_indices),
-            "attempted_words": attempted_words,
-            "changed_words": changed_words,
-            "token_length_preserved": 1,
+    def summary(self):
+        loaded = self.neighbour_table is not None
+        return {
+            "tokenizer_name": self.tokenizer_name,
+            "vocab_size": self.vocab_size,
+            "phonemisable_count": self.phonemisable_count,
+            "coverage_pct": round(100.0 * self.phonemisable_count / self.vocab_size, 2),
+            "k": self.k,
+            "cache_path": str(self.cache_path),
+            "loaded_from_cache": loaded,
+            "table_shape": tuple(self.neighbour_table.shape) if loaded else None,
         }
+    
+    def to(self, device):
+        if self.neighbour_table is None:
+            raise RuntimeError("Neighbour table is not built")
+        self.neighbour_table = self.neighbour_table.to(device)
+        return self
 
-    def perturb_tokenised_batch(
-        self,
-        token_ids_batch: List[List[int]],
-        visible_token_masks: Optional[List[List[bool]]] = None,
-        max_perturbed_words_per_sample: int = DEFAULT_MAX_PERTURBED_WORDS_PER_SAMPLE,
-    ) -> Tuple[List[List[int]], Dict[str, float]]:
-        perturbed_batch = []
-        total_eligible_words = 0
-        total_attempted_words = 0
-        total_changed_words = 0
-        total_preserved = 0
+    def _ensure_table(self, device=None):
+        if self.neighbour_table is None:
+            raise RuntimeError("Neighbour table is not built")
+        if device is not None and self.neighbour_table.device != device:
+            raise RuntimeError(f"Neighbour table is on {self.neighbour_table.device}, expected {device}. Move it once with perturber.to(device).")
+        return self.neighbour_table
 
-        if visible_token_masks is None:
-            visible_token_masks = [None] * len(token_ids_batch)
+    def perturb(self, token_ids: torch.Tensor, perturb_prob: float = 0.15, mask_token_id: int | None = None):
+        """Perturb visible tokens in-place using phonemic neighbours.
 
-        for token_ids, visible_mask in zip(token_ids_batch, visible_token_masks):
-            perturbed_ids, _, _, stats = self.perturb_tokenized_sentence(
-                token_ids,
-                visible_token_mask=visible_mask,
-                max_perturbed_words=max_perturbed_words_per_sample,
-            )
-            perturbed_batch.append(perturbed_ids)
-            total_eligible_words += stats["eligible_words"]
-            total_attempted_words += stats["attempted_words"]
-            total_changed_words += stats["changed_words"]
-            total_preserved += stats["token_length_preserved"]
+        token_ids: (B, L) tensor. If mask_token_id is provided, those positions are never perturbed.
+        Returns: perturbed_ids, perturb_mask
+        """
+        if token_ids.dtype != torch.long:
+            token_ids = token_ids.long()
+        device = token_ids.device
+        table = self._ensure_table(device=device)
 
-        batch_size = max(1, len(token_ids_batch))
-        return perturbed_batch, {
-            "eligible_words_total": total_eligible_words,
-            "attempted_words_total": total_attempted_words,
-            "changed_words_total": total_changed_words,
-            "avg_eligible_words_per_sample": total_eligible_words / batch_size,
-            "avg_attempted_words_per_sample": total_attempted_words / batch_size,
-            "avg_changed_words_per_sample": total_changed_words / batch_size,
-            "token_length_preserved_rate": total_preserved / batch_size,
-        }
+        valid = (token_ids >= 0) & (token_ids < self.vocab_size)
+        if mask_token_id is not None:
+            valid = valid & (token_ids != mask_token_id)
 
+        if not valid.any():
+            return token_ids, torch.zeros_like(token_ids, dtype=torch.bool)
 
-def run_examples(example_texts: List[str]) -> None:
-    perturber = FastTokenizerAwarePhonemePerturber(
-        tokenizer_name=TOKENIZER_NAME,
-        seed=RANDOM_SEED,
-        max_char_delta=DEFAULT_MAX_CHAR_DELTA,
-        max_phoneme_distance=DEFAULT_MAX_PHONEME_DISTANCE,
-        top_k_neighbors=DEFAULT_TOP_K_NEIGHBORS,
-        cache_dir=".cache/phoneme_perturb",
-        use_cache=True,
+        rows = token_ids.clamp(0, self.vocab_size - 1)
+        neigh = table[rows]
+        has_neigh = (neigh >= 0).any(dim=-1)
+        can_perturb = valid & has_neigh
+        perturb_mask = can_perturb & (torch.rand(token_ids.shape, device=device) < perturb_prob)
+        if not perturb_mask.any():
+            return token_ids, perturb_mask
+
+        choice = torch.randint(0, self.k, token_ids.shape, device=device)
+        replacement = neigh.gather(-1, choice.unsqueeze(-1)).squeeze(-1).to(token_ids.dtype)
+        out = token_ids.clone()
+        out[perturb_mask] = replacement[perturb_mask]
+        return out, perturb_mask
+
+def main():
+    import argparse
+    from transformers import AutoTokenizer
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tokenizer_name", type=str, default="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
+    parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--cache_dir", type=str, default="src/utils/cache")
+    parser.add_argument("--length_bucket_threshold", type=int, default=3)
+    parser.add_argument("--min_word_length", type=int, default=2)
+    parser.add_argument("--mask_prob", type=float, default=0.35)
+    parser.add_argument("--perturb_prob", type=float, default=0.50)
+    parser.add_argument("--text", type=str, default="The quick brown fox jumps over the lazy dog.")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    tok = AutoTokenizer.from_pretrained(args.tokenizer_name)
+    pert = PhonemePerturber(
+        tok,
+        k=args.k,
+        cache_dir=args.cache_dir,
+        length_bucket_threshold=args.length_bucket_threshold,
+        min_word_length=args.min_word_length,
     )
 
-    print("TOKENIZER:", TOKENIZER_NAME)
-    print("N EXAMPLES:", len(example_texts))
-    print("LEXICON SIZE:", len(perturber.lexicon))
-    print("-" * 80)
+    ids = tok(args.text, return_tensors="pt").input_ids
+    mask = torch.rand(ids.shape, device=ids.device) < args.mask_prob
+    masked = ids.clone()
+    mask_token_id = tok.mask_token_id if tok.mask_token_id is not None else tok.eos_token_id
+    masked[mask] = mask_token_id
+    noisy, p_mask = pert.perturb(masked, perturb_prob=args.perturb_prob, mask_token_id=mask_token_id)
 
-    for i, text in enumerate(example_texts, start=1):
-        original_ids = perturber.text_to_ids(text)
-        perturbed_ids, original_text, perturbed_text, stats = perturber.perturb_tokenized_sentence(
-            original_ids,
-            visible_token_mask=[True] * len(original_ids),
-            max_perturbed_words=DEFAULT_MAX_PERTURBED_WORDS_PER_SAMPLE,
-        )
-        print(f"EXAMPLE {i}")
-        print("ORIGINAL TEXT :", original_text)
-        print("ORIGINAL LEN  :", len(original_ids))
-        print("PERTURBED TEXT:", perturbed_text)
-        print("PERTURBED LEN :", len(perturbed_ids))
-        print("ROUNDTRIP TEXT:", perturber.ids_to_text(perturbed_ids))
-        print("STATS         :", stats)
-        print("-" * 80)
+    def to_tokens(x):
+        return tok.convert_ids_to_tokens(x[0].tolist())
+
+    original = to_tokens(ids)
+    masked_tokens = to_tokens(masked)
+    noised = to_tokens(noisy)
+    decoded_original = tok.decode(ids[0], skip_special_tokens=False)
+    decoded_masked = tok.decode(masked[0], skip_special_tokens=False)
+    decoded_noised = tok.decode(noisy[0], skip_special_tokens=False)
+
+    print("\nOriginal tokens:")
+    print(original)
+    print("\nMasked tokens:")
+    print(masked_tokens)
+    print("\nNoised tokens:")
+    print(noised)
+    print("\nOriginal text:")
+    print(decoded_original)
+    print("\nMasked text:")
+    print(decoded_masked)
+    print("\nNoised text:")
+    print(decoded_noised)
+    print("\nSummary:")
+    print({
+        "seq_len": ids.shape[1],
+        "masked": int(mask.sum().item()),
+        "perturbed": int(p_mask.sum().item()),
+        "mask_prob": args.mask_prob,
+        "perturb_prob": args.perturb_prob,
+        "summary": pert.summary(),
+    })
 
 
 if __name__ == "__main__":
-    run_examples(EXAMPLE_TEXTS)
+    main()
