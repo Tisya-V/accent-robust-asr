@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=hpsearch_perturbs_stage2
+#SBATCH --job-name=hpsearch_experiment1
 #SBATCH --partition=a30
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -42,41 +42,46 @@ for i in range(torch.cuda.device_count()):
    print(f"DEBUG cuda[{i}] =", torch.cuda.get_device_name(i))
 PY
 
-echo -e "\n\n==============================\n\n"
+echo -e "
+
+==============================
+
+"
 
 echo "Starting Stage 2 HP search..."
 
-python -u -m src.training.hptuning_ts2_with_perturbs \
-  --hpsearch_dir hpsearch/stage2_decoder_mask_perturb \
-  --trainer_script src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py \
-  --train_data_dir data/processed/train/ \
-  --val_data_dir data/processed/dev/ \
-  --pretrain_path models/whisfusion_ft/stage1_adapter/stage1_adapter.pt \
-  --base_model_path models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors \
-  --out_model_name whisfusion \
-  --model_name Diff_LLaMA_170M \
-  --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T \
-  --perturber_cache_dir src/utils/cache \
-  --num_devices 3 \
-  --batch_size 48 \
-  --gradient_accumulation_steps 2 \
-  --epochs 40 \
-  --learning_rate 1e-5 \
-  --second_stage_lr_multiplier 0.5 \
-  --lr_scaling linear \
-  --weight_decay 0.005 \
-  --scheduler_type cosine \
-  --warmup_ratio 0.1 \
-  --patience 5 \
-  --use_ema \
-  --ema_decay 0.995 \
-  --compute_wer_cer \
-  --use_layer_wise_lr_decay \
-  --layer_wise_lr_decay_rate 0.9 \
-  --gradient_clip_val 1.0 \
-  --precision bf16-mixed \
-  --val_steps 0 \
-  --num_workers 8 \
-  --early_stop_metric loss
+python -u -m src.training.src.training.hptuning_ts2_with_perturbs  \
+    --resume_existing \
+    --hpsearch_dir hpsearch/stage2_decoder_mask_perturb \
+    --trainer_script src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py \
+    --train_data_dir data/processed/train/   \
+    --val_data_dir data/processed/dev/   \
+    --pretrain_path models/whisfusion_ft/stage1_adapter/stage1_adapter.pt   \
+    --base_model_path models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors   \
+    --out_model_name whisfusion   \
+    --model_name Diff_LLaMA_170M   \
+    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T   \
+    --perturber_cache_dir src/utils/cache   \
+    --num_devices 3   \
+    --batch_size 48   \
+    --gradient_accumulation_steps 2   \
+    --epochs 40   \
+    --learning_rate 1e-5   \
+    --second_stage_lr_multiplier 0.5   \
+    --lr_scaling linear   \
+    --weight_decay 0.005   \
+    --scheduler_type cosine   \
+    --warmup_ratio 0.1   \
+    --patience 5   \
+    --use_ema   \
+    --ema_decay 0.995   \
+    --compute_wer_cer   \
+    --use_layer_wise_lr_decay   \
+    --layer_wise_lr_decay_rate 0.9   \
+    --gradient_clip_val 1.0   \
+    --precision 32-true   \
+    --val_steps 0   \
+    --num_workers 8   \
+    --early_stop_metric loss
 
 echo "✅ Stage 2 HP search script finished."

@@ -66,7 +66,7 @@ fabric run src/training/src/training/train_stage2_decoder_high_ratio_with_pertur
    --val_data_dir   data/processed/dev/ \
    --pretrain_path  models/whisfusion_ft/stage1_adapter/stage1_adapter.pt\
    --base_model_path models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors \
-   --out_dir        models/whisfusion_with_perturbs/stage2_decoder_high_ratio \
+   --out_dir        models/whisfusion_with_perturbs/tmp \
    --model_name     Diff_LLaMA_170M \
    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T \
    --use_phoneme_perturber \

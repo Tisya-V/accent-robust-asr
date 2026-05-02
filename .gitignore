@@ -33,3 +33,4 @@ models/*/checkpoint-*/
 results/
 nltk_data/
 archive/
+hpsearch/*/trials/

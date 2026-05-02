@@ -65,7 +65,7 @@ def forward_process(
         eps=1e-3,
         perturber: Optional[PhonemePerturber] = None,
         perturb_prob: float = 0.3
-) -> Tuple[torch.Tensor, torch.BoolTensor, torch.BoolTensor]:
+) -> Tuple[torch.Tensor, torch.BoolTensor, torch.BoolTensor, torch.Tensor]:
     """Randomly masks input tokens, then optionally phonemically perturbs the remaining visible tokens."""
     b, l = batch.shape
 
@@ -74,8 +74,8 @@ def forward_process(
     p_mask = min_mask + (max_mask - min_mask) * t
     p_mask = torch.clamp(p_mask, min=eps, max=1 - eps)
 
-    p_mask = p_mask[:, None].repeat(1, l)
-    mask_indices = torch.rand((b, l), device=batch.device) < p_mask
+    p_mask_exp = p_mask[:, None].repeat(1, l)
+    mask_indices = torch.rand((b, l), device=batch.device) < p_mask_exp
     noisy_batch = torch.where(mask_indices, mask_token_id, batch)
 
     perturb_indices = torch.zeros_like(mask_indices, dtype=torch.bool)
@@ -86,7 +86,7 @@ def forward_process(
             mask_token_id=mask_token_id,
         )
 
-    return noisy_batch, mask_indices, perturb_indices
+    return noisy_batch, mask_indices, perturb_indices, p_mask
 
 
 @torch.no_grad()
@@ -121,7 +121,7 @@ def validate(fabric: L.Fabric, model: torch.nn.Module, val_dataloader: DataLoade
         wer_sample_count = 0
         
         processed_batches = 0
-        for i, batch in enumerate(val_dataloader):
+        for i, batch in tqdm(enumerate(val_dataloader), total=total_steps, desc="Validating", disable=(fabric.global_rank != 0)):
             if i >= total_steps:
                 break
             
@@ -133,7 +133,7 @@ def validate(fabric: L.Fabric, model: torch.nn.Module, val_dataloader: DataLoade
                 condition = condition.float()
 
             # Use mask_range parameter
-            noisy_input, mask_indices, _ = forward_process(
+            noisy_input, mask_indices, _, _ = forward_process(
                 target_ids, 
                 mask_token_id=config.padded_vocab_size,
                 mask_range=mask_range
@@ -279,7 +279,7 @@ def main(fabric: L.Fabric, args, out_dir: Path):
     fabric.barrier()
     
     # Set random seed
-    fabric.seed_everything(42)
+    fabric.seed_everything(RANDOM_SEED)
     
     # Initialize tokenizer for WER/CER calculation
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
@@ -579,7 +579,7 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             warmup_type = "steps" if scheduler_step_on_batch else "epochs"
             fabric.print(f"Using extended warmup for {warmup_steps} {warmup_type} ({args.warmup_ratio*100:.0f}% of training)")
     
-    loss_func = torch.nn.CrossEntropyLoss()
+    loss_func = torch.nn.CrossEntropyLoss(reduction='none')
     
     # for checkpointing
     state = {
@@ -630,6 +630,8 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             fabric.print(f"  Perturber k: {args.perturber_k}")
             fabric.print(f"  Include perturbed tokens in loss: {'yes' if args.include_perturb_in_loss else 'no'}")
 
+        fabric.print(f"Self-correction: {'enabled' if args.use_self_correction else 'disabled'}")
+
     # Clear GPU memory
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -645,6 +647,8 @@ def main(fabric: L.Fabric, args, out_dir: Path):
         fabric.barrier()
         
         all_losses = []
+        all_mdm_losses = []
+        all_sc_losses = []
         epoch_perturb = {
             "visible_perturbed_tokens_total": 0,
             "visible_tokens_total": 0,
@@ -672,23 +676,41 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             if condition.dtype == torch.bfloat16:
                 condition = condition.float()
 
-            noisy_input, mask_indices, perturb_indices = forward_process(
+            noisy_input, mask_indices, perturb_indices, p_mask = forward_process(
                 target_ids,
                 mask_token_id=config.padded_vocab_size,
                 mask_range=(args.min_mask_ratio, args.max_mask_ratio),
                 perturber=perturber,
                 perturb_prob=args.perturb_prob,
             )
-            
+
+
             logits = model(idx=noisy_input, condition=condition)
+
             loss_mask = mask_indices | perturb_indices if args.include_perturb_in_loss else mask_indices
-            loss = loss_func(logits[loss_mask], target_ids[loss_mask])
-            
-            # Scale loss for gradient accumulation
-            loss = loss / accumulation_steps
-            
+            loss_mask_f = loss_mask.float()
+
+            token_loss_mdm = loss_func(logits.transpose(1, 2), target_ids)   # [B, L]
+            loss_mdm_per_example = (token_loss_mdm * loss_mask_f).sum(dim=1) / loss_mask_f.sum(dim=1).clamp_min(1.0)
+
+            sample_weight = 1.0 / p_mask.clamp_min(1e-3)
+            loss_mdm = (sample_weight * loss_mdm_per_example).mean()
+
+            loss_sc = torch.zeros((), device=target_ids.device)
+            if args.use_self_correction:
+                with torch.no_grad():
+                    first_pass_pred_ids = torch.argmax(logits, dim=-1)
+
+                corrector_logits = model(idx=first_pass_pred_ids, condition=condition)
+                token_loss_sc = loss_func(corrector_logits.transpose(1, 2), target_ids)   # [B, L]
+                loss_sc_per_example = token_loss_sc.mean(dim=1)
+                loss_sc= (sample_weight * loss_sc_per_example).mean()
+
+            total_loss = loss_mdm + loss_sc
+            loss = total_loss / accumulation_steps
             fabric.backward(loss)
-            
+
+
             # Update weights after accumulation steps
             if (batch_idx + 1) % accumulation_steps == 0:
                 # Conservative gradient clipping for Stage 2
@@ -705,19 +727,33 @@ def main(fabric: L.Fabric, args, out_dir: Path):
                     scheduler.step()
                 
             # Record loss
-            all_losses.append(loss.item() * accumulation_steps)
-            
+            all_losses.append(total_loss.item())
+            all_mdm_losses.append(loss_mdm.item())
+            if args.use_self_correction:
+                all_sc_losses.append(loss_sc.item())
+
             # Periodic logging
             if (batch_idx + 1) % log_interval == 0:
                 recent_losses = all_losses[-log_interval:]
                 avg_loss = sum(recent_losses) / len(recent_losses)
                 current_lr = scheduler.get_last_lr()[0]
-                
+
+                postfix = {
+                    "loss": avg_loss,
+                    "lr": current_lr,
+                }
+
+                if all_mdm_losses:
+                    recent_mdm = all_mdm_losses[-log_interval:]
+                    postfix["mdm"] = sum(recent_mdm) / len(recent_mdm)
+
+                if args.use_self_correction and all_sc_losses:
+                    recent_sc = all_sc_losses[-log_interval:]
+                    postfix["self_corr"] = sum(recent_sc) / len(recent_sc)
+
                 if fabric.global_rank == 0 and hasattr(progress_bar, 'set_postfix'):
-                    progress_bar.set_postfix(
-                        loss=avg_loss,
-                        lr=current_lr,
-                    )        
+                    progress_bar.set_postfix(**postfix)
+
         # Update scheduler per epoch
         if not scheduler_step_on_batch:
             scheduler.step()
@@ -729,6 +765,19 @@ def main(fabric: L.Fabric, args, out_dir: Path):
         if fabric.global_rank == 0 and all_losses:
             epoch_avg_loss = sum(all_losses) / len(all_losses)
             fabric.print(f"\nEpoch {epoch+1} - Average training loss: {epoch_avg_loss:.4f}")
+
+        epoch_avg_mdm_loss = None
+        epoch_avg_self_correction_loss = None
+        if fabric.global_rank == 0:
+            if all_mdm_losses:
+                epoch_avg_mdm_loss = sum(all_mdm_losses) / len(all_mdm_losses)
+                fabric.print(f"Epoch {epoch+1} - Average MDM loss: {epoch_avg_mdm_loss:.4f}")
+            if args.use_self_correction and all_sc_losses:
+                epoch_avg_self_correction_loss = sum(all_sc_losses) / len(all_sc_losses)
+                fabric.print(
+                    f"Epoch {epoch+1} - Average self-correction loss: "
+                    f"{epoch_avg_self_correction_loss:.4f}"
+                )
 
         # Validation
         val_metrics = validate(
@@ -749,6 +798,10 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             writer.add_scalar('Metrics/WER', val_wer, epoch)
             writer.add_scalar('Metrics/CER', val_cer, epoch)
             writer.add_scalar('LR', scheduler.get_last_lr()[0], epoch)
+            if epoch_avg_mdm_loss is not None:
+                writer.add_scalar('Loss/train_mdm', epoch_avg_mdm_loss, epoch)
+            if epoch_avg_self_correction_loss is not None:
+                writer.add_scalar('Loss/train_self_correction', epoch_avg_self_correction_loss, epoch)
         
         fabric.barrier()
         
@@ -912,6 +965,8 @@ def main(fabric: L.Fabric, args, out_dir: Path):
             "include_perturb_in_loss": bool(args.include_perturb_in_loss),
             "perturber_k": args.perturber_k,
 
+            "use_self_correction": bool(args.use_self_correction),
+
             "min_mask_ratio": args.min_mask_ratio,
             "max_mask_ratio": args.max_mask_ratio,
             "mask_range": [args.min_mask_ratio, args.max_mask_ratio],
@@ -989,6 +1044,8 @@ if __name__ == "__main__":
                         help='Number of phonemic neighbours per token')
     parser.add_argument('--perturber_cache_dir', type=str, default='src/utils/cache',
                         help='Cache directory for phoneme perturber')
+    parser.add_argument('--use_self_correction', action='store_true',
+                        help='Enable a second-pass self-correction loss using full argmax predictions')
 
     # Layer-wise learning rate decay
     parser.add_argument('--use_layer_wise_lr_decay', action='store_true',
