@@ -1,25 +1,26 @@
 #!/bin/bash
-#SBATCH --job-name=eval_whisfusion_ft
-#SBATCH --partition=a30
-#SBATCH --gres=gpu:1
-#SBATCH --time=08:00:00
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.out
+#PBS -N eval_whisfusion_ft
+#PBS -l select=1:ngpus=1:ncpus=4:mem=32gb
+#PBS -l walltime=06:00:00
+#PBS -o logs/eval_whisfusion_ft.out
+#PBS -e logs/eval_whisfusion_ft.err
+#PBS -j oe
 
-export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
-export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
-export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
-export MPLCONFIGDIR=/vol/bitbucket/$USER/.cache/matplotlib
-export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
+# Whisfusion model evaluation
+#
+# Usage on RDS HPC:
+# 1. chmod +x src/eval/eval_whisfusion.sh
+# 2. qsub src/eval/eval_whisfusion.sh
 
-source activate
+set -e
 
-source /vol/cuda/12.4.0/setup.sh
+# Source centralized environment configuration
+source scripts/env.sh
 
-cd /vol/bitbucket/$USER/accent-robust-asr/
+cd "${PROJECT_ROOT}"
 
 nvidia-smi
 
 python -u -m src.eval.eval_whisfusion --model whisfusion_ft
 
-echo "Evaluation completed."
+echo "✅ Evaluation completed."

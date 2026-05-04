@@ -1,37 +1,28 @@
 #!/bin/bash
-#SBATCH --job-name=hpsearch_experiment1
-#SBATCH --partition=a30
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --gres=gpu:3
-#SBATCH --cpus-per-task=12
-#SBATCH --time=24:00:00
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.out
+#PBS -N hpsearch_stage2_experiment1
+#PBS -l select=1:ngpus=3:ncpus=12:mem=96gb
+#PBS -l walltime=36:00:00
+#PBS -o logs/hpsearch_stage2_experiment1.out
+#PBS -e logs/hpsearch_stage2_experiment1.err
+#PBS -j oe
 
-export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
-export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
-export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
-export MPLCONFIGDIR=/vol/bitbucket/$USER/.cache/matplotlib
-ifconfig -a | grep -E 'UP|inet ' | grep -v lo
-
-export NCCL_P2P_DISABLE=1
-# export NCCL_SOCKET_IFNAME=enoinp0
-# export NCCL_DEBUG=WARN
-
-export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
-source activate
-
-source /vol/cuda/12.4.0/setup.sh
-
-cd /vol/bitbucket/$USER/accent-robust-asr/
+# Hyperparameter tuning for Stage 2 decoder specialization
+#
+# Usage on RDS HPC:
+# 1. chmod +x src/training/scripts/04a_hpsearch_stage2.sh
+# 2. qsub src/training/scripts/04a_hpsearch_stage2.sh
 
 set -e
 
-echo "Checking GPU/SLURM setup..."
+# Source centralized environment configuration
+source scripts/env.sh
+
+cd "${PROJECT_ROOT}"
+
+echo "Checking GPU setup..."
 nvidia-smi
-echo "SLURM_JOB_ID=$SLURM_JOB_ID"
-echo "SLURM_GPUS_ON_NODE=$SLURM_GPUS_ON_NODE"
+echo "PBS_JOBID=$PBS_JOBID"
+echo "PBS_O_WORKDIR=$PBS_O_WORKDIR"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 python - <<'PY'
 import os, torch
@@ -42,46 +33,41 @@ for i in range(torch.cuda.device_count()):
    print(f"DEBUG cuda[{i}] =", torch.cuda.get_device_name(i))
 PY
 
-echo -e "
-
-==============================
-
-"
-
+echo -e "\n\n==============================\n\n"
 echo "Starting Stage 2 HP search..."
 
 python -u -m src.training.src.training.hptuning_ts2_with_perturbs  \
     --resume_existing \
-    --hpsearch_dir hpsearch/stage2_decoder_mask_perturb \
+    --hpsearch_dir "${HPSEARCH_DIR}/stage2_decoder_mask_perturb" \
     --trainer_script src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py \
-    --train_data_dir data/processed/train/   \
-    --val_data_dir data/processed/dev/   \
-    --pretrain_path models/whisfusion_ft/stage1_adapter/stage1_adapter.pt   \
-    --base_model_path models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors   \
-    --out_model_name whisfusion   \
-    --model_name Diff_LLaMA_170M   \
-    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T   \
-    --perturber_cache_dir src/utils/cache   \
-    --num_devices 3   \
-    --batch_size 48   \
-    --gradient_accumulation_steps 2   \
-    --epochs 40   \
-    --learning_rate 1e-5   \
-    --second_stage_lr_multiplier 0.5   \
-    --lr_scaling linear   \
-    --weight_decay 0.005   \
-    --scheduler_type cosine   \
-    --warmup_ratio 0.1   \
-    --patience 5   \
-    --use_ema   \
-    --ema_decay 0.995   \
-    --compute_wer_cer   \
-    --use_layer_wise_lr_decay   \
-    --layer_wise_lr_decay_rate 0.9   \
-    --gradient_clip_val 1.0   \
-    --precision 32-true   \
-    --val_steps 0   \
-    --num_workers 8   \
+    --train_data_dir "${PROCESSED_DATA_DIR}/train/" \
+    --val_data_dir "${PROCESSED_DATA_DIR}/dev/" \
+    --pretrain_path "${MODELS_DIR}/whisfusion_ft/stage1_adapter/stage1_adapter.pt" \
+    --base_model_path "${MODELS_DIR}/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors" \
+    --out_model_name whisfusion \
+    --model_name Diff_LLaMA_170M \
+    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T \
+    --perturber_cache_dir src/utils/cache \
+    --num_devices 3 \
+    --batch_size 48 \
+    --gradient_accumulation_steps 2 \
+    --epochs 40 \
+    --learning_rate 1e-5 \
+    --second_stage_lr_multiplier 0.5 \
+    --lr_scaling linear \
+    --weight_decay 0.005 \
+    --scheduler_type cosine \
+    --warmup_ratio 0.1 \
+    --patience 5 \
+    --use_ema \
+    --ema_decay 0.995 \
+    --compute_wer_cer \
+    --use_layer_wise_lr_decay \
+    --layer_wise_lr_decay_rate 0.9 \
+    --gradient_clip_val 1.0 \
+    --precision 32-true \
+    --val_steps 0 \
+    --num_workers 8 \
     --early_stop_metric loss
 
 echo "✅ Stage 2 HP search script finished."

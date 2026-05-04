@@ -1,16 +1,19 @@
 #!/bin/bash
 # Downloads required pre-trained models for Whisfusion project
 #
-# Usage:
-# 1. chmod +x scripts/02_download_pretrained_model.sh
-# 2. ./scripts/02_download_pretrained_model.sh
+# Usage on RDS HPC:
+# 1. chmod +x src/training/scripts/02_download_pretrained_model.sh
+# 2. source scripts/env.sh && ./src/training/scripts/02_download_pretrained_model.sh
 
 set -e
+
+# Source centralized environment configuration
+source scripts/env.sh
 
 # Configuration
 REPO_ID="nieshen/SMDM"
 FILENAME="mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors"
-TARGET_DIR="pretrained_models"
+TARGET_DIR="${MODELS_DIR}/smdm"
 
 echo "============================================================"
 echo "Downloading pre-trained models..."
@@ -20,7 +23,7 @@ mkdir -p "$TARGET_DIR"
 
 echo "Downloading ${FILENAME} from Hugging Face Hub..."
 echo "Repo: ${REPO_ID}"
-echo "Target: ./${TARGET_DIR}/"
+echo "Target: ${TARGET_DIR}/"
 
 if ! command -v huggingface-cli &> /dev/null; then
    echo "❌ huggingface-cli not found. Please install with: pip install huggingface_hub"

@@ -34,3 +34,7 @@ results/
 nltk_data/
 archive/
 hpsearch/*/trials/
+
+*.md
+.claude/
+claude-files/   

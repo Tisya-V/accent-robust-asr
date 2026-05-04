@@ -1,7 +1,8 @@
 from pathlib import Path
+import os
 
 import nltk as _nltk
-NLTK_DATA_PATH = "/vol/bitbucket/tsv22/accent-robust-asr/nltk_data"
+NLTK_DATA_PATH = os.environ.get("NLTK_DATA", "nltk_data")
 _nltk.data.path.insert(0, NLTK_DATA_PATH)
 
 

@@ -1,37 +1,33 @@
 #!/bin/bash
-#SBATCH --job-name=eval_whisper_ft_hoc
-#SBATCH --partition=a30
-#SBATCH --gres=gpu:1
-#SBATCH --time=08:00:00
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.out
+#PBS -N eval_whisper_ft_hoc
+#PBS -l select=1:ngpus=1:ncpus=4:mem=32gb
+#PBS -l walltime=06:00:00
+#PBS -o logs/eval_whisper_ft_hoc.out
+#PBS -e logs/eval_whisper_ft_hoc.err
+#PBS -j oe
 
-set -euxo pipefail 
+# Whisper fine-tuned model evaluation
+#
+# Usage on RDS HPC:
+# 1. chmod +x src/eval/eval_whisper.sh
+# 2. qsub src/eval/eval_whisper.sh
 
-export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
-export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
-export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
+set -e
 
-export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
+# Source centralized environment configuration
+source scripts/env.sh
 
-source activate
+cd "${PROJECT_ROOT}"
 
-source /vol/cuda/12.4.0/setup.sh
-
-cd /vol/bitbucket/$USER/accent-robust-asr/
-
-nvidia-smi
-
-echo "=== Job started ===" | tee -a ${SLURM_SUBMIT_DIR}/logs/start_${SLURM_JOB_ID}.log
+echo "=== Job started ==="
+echo "PBS_JOBID: $PBS_JOBID"
 echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "hostname: $(hostname)"
 nvidia-smi
 echo "python --version: $(python --version)"
 which python
-echo "PATH first 3: ${PATH%%:*} ${PATH#*:} ${PATH%%:*${PATH#*:*}}"
 echo "====================="
 
-srun python -u -m src.eval.eval_whisper \
-    --models "whisper_ft_hoc"
+python -u -m src.eval.eval_whisper --models "whisper_ft_hoc"
 
-echo "Evaluation completed."
+echo "✅ Evaluation completed."
