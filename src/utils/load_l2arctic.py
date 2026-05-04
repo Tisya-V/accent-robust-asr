@@ -48,6 +48,11 @@ from src.config import (
     RANDOM_SEED,
 )
 
+# CMU speakers are only loaded from CMU-ARCTIC, not from L2-ARCTIC
+CMU_SPEAKERS = {spk for spk, l1 in SPEAKER_L1.items() if l1 == "English"}
+L2ARCTIC_TRAIN_SPEAKERS = TRAIN_SPEAKERS - CMU_SPEAKERS
+L2ARCTIC_TEST_SPEAKERS = TEST_SPEAKERS - CMU_SPEAKERS
+
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +168,7 @@ def _load_cmu_arctic_utterances(
     utts: List[Dict] = []
 
     for speaker in sorted(speakers):
-        spk_dir = cmu_root / f"cmu_us_{speaker}_arctic"
+        spk_dir = cmu_root / f"cmu_us_{speaker.lower()}_arctic"
         wav_dir = spk_dir / "wav"
         txt_done = spk_dir / "etc" / "txt.done.data"
 
@@ -206,7 +211,7 @@ def _load_raw_scripted(
     split:      str,
 ) -> List[Dict]:
     utts = []
-    for spk in tqdm(sorted(speakers), desc=f"Loading scripted utterances from {len(speakers)} speakers"):
+    for spk in tqdm(sorted(speakers), desc=f"[_load_l2_arctic] Loading utterances from {len(speakers)} speakers"):
         spk_dir = local_root / spk
         if not spk_dir.is_dir():
             print(f"  [WARN] Speaker dir not found: {spk_dir}")
@@ -224,13 +229,19 @@ def load_test_utterances(
     test_speakers: Set[str] = TEST_SPEAKERS,
     include_cmu_native: bool = True,
     cmu_root: str | Path | None = None,
-    cmu_speakers: Set[str] = frozenset({"bdl"}),
+    cmu_speakers: Set[str] | None = None,
     max_cmu_utts_per_speaker: int | None = None,
 ) -> List[Dict]:
 
-    utts = _load_raw_scripted(Path(local_root), test_speakers, "test")
+    # Separate L2-ARCTIC speakers from CMU speakers
+    l2arctic_spks = test_speakers - CMU_SPEAKERS
+
+    utts = _load_raw_scripted(Path(local_root), l2arctic_spks, "test")
 
     if include_cmu_native:
+        if cmu_speakers is None:
+            # Default to CMU speakers that are in the test set
+            cmu_speakers = test_speakers & CMU_SPEAKERS
         utts.extend(
             _load_cmu_arctic_utterances(
                 cmu_root=cmu_root,
@@ -253,7 +264,7 @@ def load_train_dev_utterances(
     held_out_l1:  str | None   = None,
     include_cmu_native: bool = True,
     cmu_root: str | Path | None = None,
-    cmu_speakers: Set[str] = frozenset({"clb", "rms", "slt"}),
+    cmu_speakers: Set[str] | None = None,
     max_cmu_utts_per_speaker: int | None = None,
 ) -> tuple[List[Dict], List[Dict]]:
     """
@@ -271,10 +282,15 @@ def load_train_dev_utterances(
     if held_out_l1:
         speakers = {spk for spk in TRAIN_SPEAKERS if SPEAKER_L1.get(spk) != held_out_l1}
 
-    utts_scripted = _load_raw_scripted(Path(local_root), speakers, split="train")
+    # Separate L2-ARCTIC speakers from CMU speakers
+    l2arctic_spks = speakers - CMU_SPEAKERS
+    utts_scripted = _load_raw_scripted(Path(local_root), l2arctic_spks, split="train")
 
     # Add CMU train speakers (clb, rms, slt)
     if include_cmu_native:
+        if cmu_speakers is None:
+            # Default to CMU speakers that are in the train set
+            cmu_speakers = speakers & CMU_SPEAKERS
         utts_cmu = _load_cmu_arctic_utterances(
             cmu_root=cmu_root,
             speakers=cmu_speakers,
@@ -351,7 +367,7 @@ def load_probe_utterances(
 
 if __name__ == "__main__":
     # # Load utterances
-    train, dev = load_train_dev_utterances(held_out_l1="Chinese")
+    train, dev = load_train_dev_utterances()
     import pandas as pd
     train_df = pd.DataFrame(train)
     speakers = train_df["speaker"].unique()
