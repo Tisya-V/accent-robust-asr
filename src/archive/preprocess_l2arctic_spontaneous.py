@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Legacy preprocessing script for spontaneous/suitcase corpus.
+No longer used in main pipeline — kept for reference.
+
+To use: from src.archive.load_l2arctic_legacy import load_suitcase_corpus
+"""
 
 from pathlib import Path
 import random
@@ -9,7 +15,7 @@ from tqdm import tqdm
 from textgrid import TextGrid  # praat-parsed TextGrid
 
 from src.config import LOCAL_L2ARCTIC_DIR, SPONTANEOUS_SUBDIR
-from src.utils.load_l2arctic import load_suitcase_corpus
+from src.archive.load_l2arctic_legacy import load_suitcase_corpus
 
 
 TARGET_SR = 16000

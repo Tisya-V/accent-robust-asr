@@ -43,11 +43,9 @@ from src.config import (
     LOCAL_L2ARCTIC_DIR,
     CMU_ARCTIC_DIR,
     SPEAKER_L1,
-    SPONTANEOUS_SUBDIR,
     TEST_SPEAKERS,
     TRAIN_SPEAKERS,
     RANDOM_SEED,
-    SUITCASE_SUBDIR,
 )
 
 
@@ -202,40 +200,6 @@ def _load_cmu_arctic_utterances(
     print(f"[_load_cmu_arctic_utterances] {len(utts)} utterances from {len(speakers)} speakers")
     return utts
 
-def _load_edacc_utterances(
-    manifest_path: str | Path,
-    l1: str | None = None,
-    max_utts: int | None = None,
-) -> List[Dict]:
-    """
-    Load the pre-cut Jamaican EdAcc subset from a CSV manifest.
-    Expect columns:
-      utteranceid,speaker,l1,accent,text,wavpath,split,corpus,recording_id,start,end,duration,n_words
-    """
-    import pandas as pd
-
-    manifest_path = Path(manifest_path)
-    df = pd.read_csv(manifest_path)
-
-    if max_utts is not None:
-        df = df.head(max_utts).copy()
-
-    utts = []
-    for _, row in df.iterrows():
-        utts.append(
-            {
-                "utterance_id": str(row["utteranceid"]),
-                "speaker": str(row["speaker"]),
-                "l1": l1,
-                "wav_path": str(row["wavpath"]),
-                "textgrid": None,
-                "text": str(row.get("text", "")),
-                "split": "test",
-                "domain": "spontaneous",
-            }
-        )
-    return utts
-
 def _load_raw_scripted(
     local_root: Path,
     speakers:   Set[str],
@@ -258,13 +222,10 @@ def _load_raw_scripted(
 def load_test_utterances(
     local_root: str | Path = LOCAL_L2ARCTIC_DIR,
     test_speakers: Set[str] = TEST_SPEAKERS,
-    include_spontaneous: bool = False,
     include_cmu_native: bool = True,
     cmu_root: str | Path | None = None,
     cmu_speakers: Set[str] = frozenset({"bdl"}),
     max_cmu_utts_per_speaker: int | None = None,
-    include_edacc: bool = True,
-    max_edacc_utts: int | None = None,
 ) -> List[Dict]:
 
     utts = _load_raw_scripted(Path(local_root), test_speakers, "test")
@@ -277,28 +238,7 @@ def load_test_utterances(
                 split="test",
                 max_utts_per_speaker=max_cmu_utts_per_speaker,
             )
-        )    
-        
-    if include_spontaneous:
-        utts.extend(load_spontaneous(Path(local_root) / SPONTANEOUS_SUBDIR / "manifest.csv"))
-        utts = [u for u in utts if u["speaker"] in test_speakers]
-        print(f"[l2arctic] Loaded {len(utts)} spontaneous utterances from {len(set(u['speaker'] for u in utts))} speakers")
-
-        if include_edacc:
-            utts.extend(
-                _load_edacc_utterances(
-                    manifest_path="data/edacc_jamaican_subset/jamaican_subset_all.csv",
-                    l1="Jamaican",
-                    max_utts=max_edacc_utts,
-                )
-            )
-            utts.extend(
-                _load_edacc_utterances(
-                    manifest_path="data/edacc_english_subset/english_subset_all.csv",
-                    l1="English",
-                    max_utts=max_edacc_utts,
-                )
-            )
+        )
 
     for u in utts:
         u["split"] = "test"
@@ -311,7 +251,6 @@ def load_train_dev_utterances(
     dev_fraction: float      = 0.15,
     random_seed:  int        = RANDOM_SEED,
     held_out_l1:  str | None   = None,
-    include_spontaneous: bool = False,
     include_cmu_native: bool = True,
     cmu_root: str | Path | None = None,
     cmu_speakers: Set[str] = frozenset({"clb", "rms", "slt"}),
@@ -353,21 +292,6 @@ def load_train_dev_utterances(
     for u in dev:
         u["split"] = "dev"
 
-    if include_spontaneous:
-        print("Including spontaneous utterances in training/dev splits ...")
-        utts_spontaneous = load_spontaneous(Path(local_root) / SPONTANEOUS_SUBDIR / "manifest.csv")
-        utts_spontaneous = [u for u in utts_spontaneous if u["speaker"] in speakers]
-        train_spontaneous, dev_spontaneous = train_test_split(
-            utts_spontaneous,
-            test_size    = dev_fraction,
-            random_state = random_seed,
-            stratify     = [u["l1"] for u in utts_spontaneous],
-        )
-        
-        train.extend(train_spontaneous)
-        dev.extend(dev_spontaneous)
-        print(f"Included {len(utts_spontaneous)} spontaneous utterances in training")
-
     print(f"[load_train_dev_utterances]  train={len(train)}  dev={len(dev)}  "
           f"held_out_l1={held_out_l1}")
 
@@ -379,94 +303,14 @@ def load_all_scripted(
     dev_fraction: float      = 0.15,
     random_seed:  int        = RANDOM_SEED,
 ) -> List[Dict]:
-    """All 24 speakers (scripted) with split labels. Used by probe scripts."""
+    """All scripted speakers (L2-ARCTIC + CMU) with split labels. Used by probe scripts."""
     train, dev = load_train_dev_utterances(local_root, dev_fraction, random_seed)
     test        = load_test_utterances(local_root)
     return train + dev + test
 
 
 # ---------------------------------------------------------------------------
-# Public loader — spontaneous / suitcase corpus (OOD eval only)
-# ---------------------------------------------------------------------------
-
-def load_suitcase_corpus(
-    local_root: str | Path = LOCAL_L2ARCTIC_DIR,
-    speakers:   Set[str]   = frozenset({"all"}),
-) -> List[Dict]:
-    """
-    Load the suitcase corpus (spontaneous speech) as an OOD evaluation set.
-
-    All utterances are labelled split="ood", domain="spontaneous".
-    Speaker identity is inferred from the filename prefix (e.g. "ABA_...").
-    This data is NEVER used for training.
-
-    Parameters
-    ----------
-    local_root : root of local L2-ARCTIC corpus
-    speakers   : {"all"} → all speakers found; or an explicit set of IDs to keep
-    """
-    from src.config import SPEAKERS as ALL_SPEAKERS
-
-    target      = set(ALL_SPEAKERS) if "all" in speakers else set(speakers)
-    sc_dir      = Path(local_root) / SUITCASE_SUBDIR
-    wav_dir     = sc_dir / "wav"
-    tg_dir      = sc_dir / "annotation"
-    txt_dir     = sc_dir / "transcript"
-
-    if not sc_dir.exists():
-        raise FileNotFoundError(
-            f"Suitcase corpus not found at {sc_dir}. "
-            "Check LOCAL_L2ARCTIC_DIR in config.py."
-        )
-
-    utts = []
-    for wav_path in sorted(wav_dir.glob("*.wav")):
-        stem = wav_path.stem
-        # Infer speaker from filename prefix (e.g. "ABA_sc001" → "ABA")
-        speaker = stem.upper()
-        if speaker is None or speaker not in target:
-            continue
-        tg_path = tg_dir / f"{stem}.TextGrid"
-        if not tg_path.exists():
-            continue
-        utts.append({
-            "utterance_id": stem,
-            "speaker":      speaker,
-            "l1":           SPEAKER_L1.get(speaker, "Unknown"),
-            "wav_path":     str(wav_path),
-            "textgrid":     str(tg_path),
-            "text":         _read_transcript(txt_dir / f"{stem}.txt"),
-            "split":        "ood",
-            "domain":       "spontaneous",
-        })
-
-    n_spk = len({u["speaker"] for u in utts})
-    print(f"[load_suitcase_corpus]  {len(utts)} utterances from {n_spk} speakers")
-    return utts
-
-def load_spontaneous(path):
-    '''
-    Assumes preprocessed into chunks via src.utils.preprocess_l2arctic_spontaneous.py
-    '''
-    import pandas as pd
-    df = pd.read_csv(path)
-
-    return [
-        {
-            "utterance_id": r["utterance_id"],
-            "speaker": r["speaker"],
-            "l1": r["l1"],
-            "wav_path": r["wav_path"],
-            "textgrid": None,
-            "text": r["text"],
-            "split": "ood",
-            "domain": "spontaneous",
-        }
-        for _, r in df.iterrows()
-    ]
-
-# ---------------------------------------------------------------------------
-# Probe loader — scripted only; use load_suitcase_corpus() separately for OOD
+# Probe loader — scripted only
 # ---------------------------------------------------------------------------
 
 def load_probe_utterances(
@@ -476,13 +320,12 @@ def load_probe_utterances(
 ) -> List[Dict]:
     """
     Load scripted utterances for probing and clustering.
-    For OOD / spontaneous probing, call load_suitcase_corpus() directly.
 
     Parameters
     ----------
     local_root           : root of local L2-ARCTIC corpus
     max_utts_per_speaker : deterministic stride-based subsample per speaker
-    speakers             : {"all"} → all 24 speakers; or an explicit set of IDs
+    speakers             : {"all"} → all scripted speakers; or an explicit set of IDs
     """
     from src.config import SPEAKERS as ALL_SPEAKERS
 
