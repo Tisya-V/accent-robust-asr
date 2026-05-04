@@ -41,6 +41,7 @@ from sklearn.model_selection import train_test_split
 
 from src.config import (
     LOCAL_L2ARCTIC_DIR,
+    CMU_ARCTIC_DIR,
     SPEAKER_L1,
     SPONTANEOUS_SUBDIR,
     TEST_SPEAKERS,
@@ -138,8 +139,9 @@ def _parse_cmu_txt_done_data(path: Path) -> Dict[str, str]:
 
 
 def _load_cmu_arctic_utterances(
-    cmu_root: str | Path,
+    cmu_root: str | Path | None = None,
     speakers: Set[str] = frozenset({"bdl"}),
+    split: str = "test",
     max_utts_per_speaker: int | None = None,
 ) -> List[Dict]:
     """
@@ -157,6 +159,8 @@ def _load_cmu_arctic_utterances(
     Returns utterance dicts with:
         utterance_id, speaker, l1, wav_path, textgrid, text, split, domain
     """
+    if cmu_root is None:
+        cmu_root = CMU_ARCTIC_DIR
     cmu_root = Path(cmu_root)
     utts: List[Dict] = []
 
@@ -185,7 +189,7 @@ def _load_cmu_arctic_utterances(
                 "wav_path": str(wav_path),
                 "textgrid": None,
                 "text": text,
-                "split": "test",
+                "split": split,
                 "domain": "scripted",
             })
 
@@ -195,7 +199,7 @@ def _load_cmu_arctic_utterances(
 
         utts.extend(spk_utts)
 
-    print(f"[load_cmu_arctic_utterances] {len(utts)} utterances from {len(speakers)} speakers")
+    print(f"[_load_cmu_arctic_utterances] {len(utts)} utterances from {len(speakers)} speakers")
     return utts
 
 def _load_edacc_utterances(
@@ -256,7 +260,7 @@ def load_test_utterances(
     test_speakers: Set[str] = TEST_SPEAKERS,
     include_spontaneous: bool = False,
     include_cmu_native: bool = True,
-    cmu_root: str | Path | None = "data",
+    cmu_root: str | Path | None = None,
     cmu_speakers: Set[str] = frozenset({"bdl"}),
     max_cmu_utts_per_speaker: int | None = None,
     include_edacc: bool = True,
@@ -266,12 +270,11 @@ def load_test_utterances(
     utts = _load_raw_scripted(Path(local_root), test_speakers, "test")
 
     if include_cmu_native:
-        if cmu_root is None:
-            raise ValueError("include_cmu_native=True but cmu_root was not provided")
         utts.extend(
             _load_cmu_arctic_utterances(
                 cmu_root=cmu_root,
                 speakers=cmu_speakers,
+                split="test",
                 max_utts_per_speaker=max_cmu_utts_per_speaker,
             )
         )    
@@ -309,10 +312,18 @@ def load_train_dev_utterances(
     random_seed:  int        = RANDOM_SEED,
     held_out_l1:  str | None   = None,
     include_spontaneous: bool = False,
+    include_cmu_native: bool = True,
+    cmu_root: str | Path | None = None,
+    cmu_speakers: Set[str] = frozenset({"clb", "rms", "slt"}),
+    max_cmu_utts_per_speaker: int | None = None,
 ) -> tuple[List[Dict], List[Dict]]:
     """
-    Utterances from the 18 non-held-out speakers split into train / dev
+    Utterances from non-held-out speakers split into train / dev
     at the utterance level, stratified by L1.
+
+    Includes:
+    - L2-ARCTIC train speakers (18 speakers from 6 L1s)
+    - CMU-ARCTIC native English speakers (clb, rms, slt by default; bdl is test-only)
 
     Returns (train_utts, dev_utts).
     """
@@ -322,6 +333,16 @@ def load_train_dev_utterances(
         speakers = {spk for spk in TRAIN_SPEAKERS if SPEAKER_L1.get(spk) != held_out_l1}
 
     utts_scripted = _load_raw_scripted(Path(local_root), speakers, split="train")
+
+    # Add CMU train speakers (clb, rms, slt)
+    if include_cmu_native:
+        utts_cmu = _load_cmu_arctic_utterances(
+            cmu_root=cmu_root,
+            speakers=cmu_speakers,
+            split="train",
+            max_utts_per_speaker=max_cmu_utts_per_speaker,
+        )
+        utts_scripted.extend(utts_cmu)
 
     train, dev = train_test_split(
         utts_scripted,

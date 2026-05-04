@@ -17,13 +17,14 @@ WHISPER_N_ENCODER_LAYERS = 12     # whisper-small
 
 # Dataset
 LOCAL_L2ARCTIC_DIR = Path("data/l2_arctic")
+CMU_ARCTIC_DIR = Path(os.environ.get("CMU_ARCTIC_DIR", "data/cmu_arctic"))
 SUITCASE_SUBDIR = "suitcase_corpus"
 SPONTANEOUS_SUBDIR = "spontaneous"
 
 MODELS_DIR = Path("models")
 
 
-# L2-ARCTIC speaker → L1 mapping (all 24 speakers)
+# Speaker → L1 mapping (24 L2-ARCTIC + 4 CMU-ARCTIC native English speakers)
 SPEAKER_L1 = {
     "ABA": "Arabic",   "SKA": "Arabic",
     "YBAA": "Arabic",  "ZHAA": "Arabic",
@@ -37,12 +38,14 @@ SPEAKER_L1 = {
     "MBMPS": "Spanish",  "NJS": "Spanish",
     "HQTV": "Vietnamese", "PNV": "Vietnamese",
     "THV": "Vietnamese", "TLV": "Vietnamese",
+    "BDL": "English",  "CLB": "English",
+    "RMS": "English",  "SLT": "English",
 }
 
 SPEAKERS = sorted(SPEAKER_L1.keys())
-# Hold out one speaker per L1 for testing
-# Even amount of f/m
-TEST_SPEAKERS = {"ZHAA", "BWC", "SVBI", "HJK", "EBVS", "HQTV"}
+# Hold out one speaker per L1 for testing (28 speakers total, 7 L1s, 1 per L1)
+# Even amount of f/m when possible
+TEST_SPEAKERS = {"ZHAA", "BWC", "SVBI", "HJK", "EBVS", "HQTV", "BDL"}
 TRAIN_SPEAKERS = set(SPEAKERS) - TEST_SPEAKERS
 L1_GROUPS = sorted(set(SPEAKER_L1.values()))
 L1_2_ID   = {l1: i for i, l1 in enumerate(L1_GROUPS)}
