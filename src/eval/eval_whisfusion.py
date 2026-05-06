@@ -19,14 +19,20 @@ import torch
 import jiwer
 from tqdm import tqdm
 
-from src.config import LOCAL_L2ARCTIC_DIR, MODELS_DIR, NLTK_DATA_PATH
+from src.config import LOCAL_L2ARCTIC_DIR, MODELS_DIR
 from src.utils.load_l2arctic import load_test_utterances
 
 # --- NLTK / G2P setup ---
 import os
 import nltk
-nltk.data.path.insert(0, NLTK_DATA_PATH)
-os.environ["NLTK_DATA"] = NLTK_DATA_PATH
+
+# Download required NLTK data if missing (to NLTK_DATA directory)
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+except LookupError:
+    nltk_data_dir = os.environ.get('NLTK_DATA')
+    print(f"Downloading NLTK averaged_perceptron_tagger_eng to {nltk_data_dir}...")
+    nltk.download('averaged_perceptron_tagger_eng', download_dir=nltk_data_dir)
 
 import g2p_en
 _G2P = g2p_en.G2p()
@@ -208,6 +214,22 @@ def evaluate(dataset, model: WhisfusionWrapper):
 # Main
 # ---------------------------------------------------------------------------
 
+def _find_stage2_decoder_pt(model_dir: str | Path) -> Path:
+    """Find the stage2_decoder .pt file in the model directory."""
+    stage2_dir = Path(model_dir) / "stage2_decoder"
+    if not stage2_dir.exists():
+        raise FileNotFoundError(f"stage2_decoder directory not found: {stage2_dir}")
+
+    pt_files = list(stage2_dir.glob("*.pt"))
+    if not pt_files:
+        raise FileNotFoundError(f"No .pt files found in {stage2_dir}")
+
+    # Return the first (or most recent) .pt file
+    pt_file = sorted(pt_files, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+    print(f"Found stage2_decoder model: {pt_file}")
+    return pt_file
+
+
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -221,7 +243,7 @@ def main():
 
     print(f"Device: {device}")
 
-    adapter_path = f"{MODELS_DIR}/{args.model}/{args.model}_stage2_decoder.pt"
+    adapter_path = _find_stage2_decoder_pt(f"{MODELS_DIR}/{args.model}")
     # check if eval files already exist
     output_file = f"{args.model}_predictions.csv"
     output_path = Path(args.output_dir) / output_file

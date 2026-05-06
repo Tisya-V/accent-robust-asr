@@ -33,14 +33,20 @@ import torch
 import jiwer
 from tqdm import tqdm
 
-from src.config import LOCAL_L2ARCTIC_DIR, NLTK_DATA_PATH
+from src.config import LOCAL_L2ARCTIC_DIR
 from src.utils.load_l2arctic import load_test_utterances
 from src.utils.model_loader import get_model_registry
 
 import os
 import nltk
-nltk.data.path.insert(0, NLTK_DATA_PATH)
-os.environ["NLTK_DATA"] = NLTK_DATA_PATH
+
+# Download required NLTK data if missing (to NLTK_DATA directory)
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+except LookupError:
+    nltk_data_dir = os.environ.get('NLTK_DATA')
+    print(f"Downloading NLTK averaged_perceptron_tagger_eng to {nltk_data_dir}...")
+    nltk.download('averaged_perceptron_tagger_eng', download_dir=nltk_data_dir)
 
 import g2p_en
 

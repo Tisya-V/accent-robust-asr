@@ -1,14 +1,23 @@
 #!/bin/bash
+#PBS -N download_pretrained
+#PBS -l select=1:ncpus=2:mem=8gb
+#PBS -l walltime=01:00:00
+#PBS -o logs/download_pretrained.out
+#PBS -e logs/download_pretrained.err
+#PBS -j oe
+
 # Downloads required pre-trained models for Whisfusion project
 #
 # Usage on RDS HPC:
 # 1. chmod +x src/training/scripts/02_download_pretrained_model.sh
-# 2. source scripts/env.sh && ./src/training/scripts/02_download_pretrained_model.sh
+# 2. qsub src/training/scripts/02_download_pretrained_model.sh
 
 set -e
 
 # Source centralized environment configuration
-source scripts/env.sh
+source ${PBS_O_WORKDIR}/scripts/env.sh
+
+cd "${PROJECT_ROOT}"
 
 # Configuration
 REPO_ID="nieshen/SMDM"
@@ -25,12 +34,7 @@ echo "Downloading ${FILENAME} from Hugging Face Hub..."
 echo "Repo: ${REPO_ID}"
 echo "Target: ${TARGET_DIR}/"
 
-if ! command -v huggingface-cli &> /dev/null; then
-   echo "❌ huggingface-cli not found. Please install with: pip install huggingface_hub"
-   exit 1
-fi
-
-huggingface-cli download \
+hf download \
    "$REPO_ID" \
    "$FILENAME" \
    --repo-type model \

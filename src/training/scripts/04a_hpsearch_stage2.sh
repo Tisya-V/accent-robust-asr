@@ -19,6 +19,19 @@ source ${PBS_O_WORKDIR}/scripts/env.sh
 
 cd "${PROJECT_ROOT}"
 
+# Create real-time log file
+RUNTIME_LOG="logs/hpsearch_stage2_runtime_${PBS_JOBID}.log"
+mkdir -p logs
+exec > >(tee -a "$RUNTIME_LOG")
+exec 2>&1
+
+echo "=========================================="
+echo "Hyperparameter Search Stage 2 Job Started"
+echo "Real-time log: $RUNTIME_LOG"
+echo "Track with: tail -f $RUNTIME_LOG"
+echo "=========================================="
+echo ""
+
 echo "Checking GPU setup..."
 nvidia-smi
 echo "PBS_JOBID=$PBS_JOBID"

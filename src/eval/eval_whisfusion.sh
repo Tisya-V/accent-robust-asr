@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N eval_whisfusion_ft
-#PBS -l select=1:ngpus=1:ncpus=4:mem=32gb
-#PBS -l walltime=06:00:00
+#PBS -l select=1:ngpus=1:ncpus=4:mem=24gb
+#PBS -l walltime=02:00:00
 #PBS -o logs/eval_whisfusion_ft.out
 #PBS -e logs/eval_whisfusion_ft.err
 #PBS -j oe
@@ -18,6 +18,19 @@ set -e
 source ${PBS_O_WORKDIR}/scripts/env.sh
 
 cd "${PROJECT_ROOT}"
+
+# Create real-time log file
+RUNTIME_LOG="logs/eval_whisfusion_runtime_${PBS_JOBID}.log"
+mkdir -p logs
+exec > >(tee -a "$RUNTIME_LOG")
+exec 2>&1
+
+echo "=========================================="
+echo "Whisfusion Evaluation Job Started"
+echo "Real-time log: $RUNTIME_LOG"
+echo "Track with: tail -f $RUNTIME_LOG"
+echo "=========================================="
+echo ""
 
 nvidia-smi
 

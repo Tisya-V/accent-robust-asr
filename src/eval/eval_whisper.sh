@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N eval_whisper_ft_hoc
-#PBS -l select=1:ngpus=1:ncpus=4:mem=32gb
-#PBS -l walltime=06:00:00
+#PBS -l select=1:ngpus=1:ncpus=4:mem=16gb
+#PBS -l walltime=02:00:00
 #PBS -o logs/eval_whisper_ft_hoc.out
 #PBS -e logs/eval_whisper_ft_hoc.err
 #PBS -j oe
@@ -19,6 +19,19 @@ source ${PBS_O_WORKDIR}/scripts/env.sh
 
 cd "${PROJECT_ROOT}"
 
+# Create real-time log file
+RUNTIME_LOG="logs/eval_whisper_runtime_${PBS_JOBID}.log"
+mkdir -p logs
+exec > >(tee -a "$RUNTIME_LOG")
+exec 2>&1
+
+echo "=========================================="
+echo "Whisper Evaluation Job Started"
+echo "Real-time log: $RUNTIME_LOG"
+echo "Track with: tail -f $RUNTIME_LOG"
+echo "=========================================="
+echo ""
+
 echo "=== Job started ==="
 echo "PBS_JOBID: $PBS_JOBID"
 echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
@@ -28,6 +41,6 @@ echo "python --version: $(python --version)"
 which python
 echo "====================="
 
-python -u -m src.eval.eval_whisper --models "whisper_ft_hoc"
+python -u -m src.eval.eval_whisper --models "baseline,whisper_finetuned"
 
 echo "✅ Evaluation completed."

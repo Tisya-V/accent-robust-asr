@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N whisfusion_stage1_adapter
-#PBS -l select=1:ngpus=3:ncpus=12:mem=96gb
-#PBS -l walltime=12:00:00
+#PBS -l select=1:ngpus=1:ncpus=2:mem=24gb
+#PBS -l walltime=8:00:00
 #PBS -o logs/whisfusion_stage1_adapter.out
 #PBS -e logs/whisfusion_stage1_adapter.err
 #PBS -j oe
@@ -18,6 +18,19 @@ set -e
 source ${PBS_O_WORKDIR}/scripts/env.sh
 
 cd "${PROJECT_ROOT}"
+
+# Create real-time log file
+RUNTIME_LOG="logs/whisfusion_stage1_adapter_runtime_${PBS_JOBID}.log"
+mkdir -p logs
+exec > >(tee -a "$RUNTIME_LOG")
+exec 2>&1
+
+echo "=========================================="
+echo "Whisfusion Stage 1 Training Job Started"
+echo "Real-time log: $RUNTIME_LOG"
+echo "Track with: tail -f $RUNTIME_LOG"
+echo "=========================================="
+echo ""
 
 echo "Checking GPU setup..."
 nvidia-smi
@@ -36,16 +49,17 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Stage 1: Adapter Training..."
 
-fabric run models/whisfusion/src/training/train_stage1_adapter.py \
+fabric run src/training/src/training/train_stage1_adapter.py \
     --strategy=ddp \
-    --devices=3 \
-    --train_data_dir "${DATA_DIR}/processed/train__heldout-Chinese/scripted" \
-    --val_data_dir   "${DATA_DIR}/processed/dev__heldout-Chinese/scripted" \
+    --devices=1 \
+    --train_data_dir "${DATA_DIR}/processed/train/" \
+    --val_data_dir   "${DATA_DIR}/processed/dev/" \
     --pretrain_path  "${MODELS_DIR}/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors" \
-    --out_dir        "${MODELS_DIR}/whisfusion_ft_hoc/stage1_adapter" \
-    --num_devices    3 \
-    --batch_size     48 \
-    --gradient_accumulation_steps 4 \
+    --out_dir        "${MODELS_DIR}/whisfusion_finetuned/stage1_adapter/ft-Diff_LLaMA_170M-1777965131" \
+    --resume \
+    --num_devices    1 \
+    --batch_size     64 \
+    --gradient_accumulation_steps 6 \
     --learning_rate  1e-4 \
     --lr_scaling     linear \
     --lr_max         3e-4 \
@@ -55,6 +69,6 @@ fabric run models/whisfusion/src/training/train_stage1_adapter.py \
     --patience       5 \
     --weight_decay   0.01 \
     --clip_grad_norm 0.5 \
-    --num_workers    12
+    --num_workers    4
 
 echo "✅ Stage 1 training script finished."
