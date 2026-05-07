@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+DEFAULT_TOKENIZER_NAME = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+
 
 @dataclass
 class Exp1Config:
@@ -36,7 +38,7 @@ class Exp1Config:
     results_dir: str = "results/experiment1_stage1"
 
     # Tokenizer / vocab
-    tokenizer_name: str = "TinyLlama/TinyLlama-1.1B"
+    tokenizer_name: str = DEFAULT_TOKENIZER_NAME
     vocab_size: int = 32000
 
     def to_dict(self):

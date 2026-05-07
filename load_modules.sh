@@ -8,3 +8,4 @@ echo -e "Modules loaded:"
 module list
 source .venv/bin/activate
 echo -e "Venv activated: $(which python)"
+source ./scripts/env.sh

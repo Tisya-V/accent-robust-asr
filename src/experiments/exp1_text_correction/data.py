@@ -12,6 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 import random
 
 from transformers import AutoTokenizer
+from src.experiments.exp1_text_correction.config import DEFAULT_TOKENIZER_NAME
 
 
 class Exp1Dataset(Dataset):
@@ -25,7 +26,7 @@ class Exp1Dataset(Dataset):
     def __init__(
         self,
         pt_files: List[Path],
-        tokenizer_name: str = "TinyLlama/TinyLlama-1.1B",
+        tokenizer_name: str = DEFAULT_TOKENIZER_NAME,
         max_length: int = 256,
         mask_ratio_range: Tuple[float, float] = (0.7, 1.0),
     ):
@@ -82,7 +83,7 @@ class Exp1Dataset(Dataset):
 
 def create_dataloaders(
     batch_size: int = 16,
-    tokenizer_name: str = "TinyLlama/TinyLlama-1.1B",
+    tokenizer_name: str = DEFAULT_TOKENIZER_NAME,
     max_length: int = 256,
     data_root: str = "data/processed",
     mask_ratio_range: Tuple[float, float] = (0.7, 1.0),
