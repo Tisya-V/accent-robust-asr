@@ -14,6 +14,7 @@ logs/*
 !logs/.gitkeep
 output/*
 !output/.gitkeep
+*.ipynb_checkpoints/
 
 # Audio and model files
 *.wav
