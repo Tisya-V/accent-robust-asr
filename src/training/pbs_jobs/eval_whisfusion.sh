@@ -9,8 +9,8 @@
 # Whisfusion model evaluation
 #
 # Usage on RDS HPC:
-# 1. chmod +x src/eval/eval_whisfusion.sh
-# 2. qsub src/eval/eval_whisfusion.sh
+# 1. chmod +x src/training/pbs_jobs/eval_whisfusion.sh
+# 2. qsub src/training/pbs_jobs/eval_whisfusion.sh
 
 set -e
 
@@ -34,6 +34,6 @@ echo ""
 
 nvidia-smi
 
-python -u -m src.eval.eval_whisfusion --model whisfusion_ft
+python -u -m src.training.evaluation.eval_whisfusion --model whisfusion_ft
 
 echo "✅ Evaluation completed."

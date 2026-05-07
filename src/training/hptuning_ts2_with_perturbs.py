@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--trainer_script",
         type=str,
-        default="src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py",
+        default="src/training/train_stage2_decoder_perturbs.py",
     )
 
     p.add_argument("--train_data_dir", type=str, nargs="+", required=True)

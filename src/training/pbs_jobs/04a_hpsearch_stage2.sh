@@ -49,10 +49,10 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Stage 2 HP search..."
 
-python -u -m src.training.src.training.hptuning_ts2_with_perturbs  \
+python -u -m src.training.hptuning_ts2_with_perturbs  \
     --resume_existing \
     --hpsearch_dir "${HPSEARCH_DIR}/stage2_decoder_mask_perturb" \
-    --trainer_script src/training/src/training/train_stage2_decoder_high_ratio_with_perturbs.py \
+    --trainer_script src/training/train_stage2_decoder_perturbs.py \
     --train_data_dir "${PROCESSED_DATA_DIR}/train/" \
     --val_data_dir "${PROCESSED_DATA_DIR}/dev/" \
     --pretrain_path "${MODELS_DIR}/whisfusion_ft/stage1_adapter/stage1_adapter.pt" \

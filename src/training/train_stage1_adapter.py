@@ -11,14 +11,14 @@ import shutil
 import sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-SRC_ROOT = PROJECT_ROOT / "src"
+SRC_ROOT = PROJECT_ROOT / "src" / "training"
 
 for p in (str(PROJECT_ROOT), str(SRC_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
 print(f"Adding project root to path: {PROJECT_ROOT}")
-print(f"Adding src root to path: {SRC_ROOT}")
+print(f"Adding training src root to path: {SRC_ROOT}")
 
 import torch
 from torch.utils.data import DataLoader
@@ -35,7 +35,7 @@ from lightning.fabric.strategies import FSDPStrategy
 from torch.utils.data.distributed import DistributedSampler
 
 
-from src.lit_gpt.diffmodel import TransEncoder, Block, Config
+from lit_gpt.diffmodel import TransEncoder, Block, Config
 from data.dataset_stage1 import create_stage1_dataloader
 from safetensors.torch import load_file
 from transformers import AutoTokenizer

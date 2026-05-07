@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 import shutil
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-SRC_ROOT = PROJECT_ROOT / "src" / "training" / "src" 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+SRC_ROOT = PROJECT_ROOT / "src" / "training" 
 
 for p in (str(PROJECT_ROOT), str(SRC_ROOT)):
     if p not in sys.path:

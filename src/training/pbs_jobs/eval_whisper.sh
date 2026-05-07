@@ -9,8 +9,8 @@
 # Whisper fine-tuned model evaluation
 #
 # Usage on RDS HPC:
-# 1. chmod +x src/eval/eval_whisper.sh
-# 2. qsub src/eval/eval_whisper.sh
+# 1. chmod +x src/training/pbs_jobs/eval_whisper.sh
+# 2. qsub src/training/pbs_jobs/eval_whisper.sh
 
 set -e
 
@@ -41,6 +41,6 @@ echo "python --version: $(python --version)"
 which python
 echo "====================="
 
-python -u -m src.eval.eval_whisper --models "baseline,whisper_finetuned"
+python -u -m src.training.evaluation.eval_whisper --models "baseline,whisper_finetuned"
 
 echo "✅ Evaluation completed."

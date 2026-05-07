@@ -50,7 +50,7 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Stage 2: Decoder Specialization (High Mask Ratio, With Perturbations)..."
 
-fabric run src/training/src/training/train_stage2_decoder_perturbs.py \
+fabric run src/training/train_stage2_decoder_perturbs.py \
    --strategy=ddp \
    --devices=2 \
    --train_data_dir "${PROCESSED_DATA_DIR}/train/" \

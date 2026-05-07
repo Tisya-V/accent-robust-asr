@@ -49,7 +49,7 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Stage 1: Adapter Training..."
 
-fabric run src/training/src/training/train_stage1_adapter.py \
+fabric run src/training/train_stage1_adapter.py \
     --strategy=ddp \
     --devices=1 \
     --train_data_dir "${DATA_DIR}/processed/train/" \
