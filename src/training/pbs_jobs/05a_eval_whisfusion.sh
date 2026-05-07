@@ -34,6 +34,6 @@ echo ""
 
 nvidia-smi
 
-python -u -m src.training.evaluation.eval_whisfusion --model whisfusion_ft
+python -u -m src.training.evaluation.eval_whisfusion --model whisfusion_finetuned
 
 echo "✅ Evaluation completed."

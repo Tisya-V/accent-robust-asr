@@ -1,0 +1,21 @@
+{
+  "use_perturbation": true,
+  "perturb_prob": 0.1,
+  "perturber_k": 10,
+  "visible_mask_ratio_low": 0.3,
+  "visible_mask_ratio_high": 0.7,
+  "include_perturb_in_loss": true,
+  "n_layers": 4,
+  "n_embd": 256,
+  "n_heads": 4,
+  "lr": 0.001,
+  "weight_decay": 0.01,
+  "batch_size": 16,
+  "max_epochs": 10,
+  "warmup_steps": 100,
+  "max_length": 256,
+  "data_root": "data/processed",
+  "results_dir": "results/experiment1_stage1",
+  "tokenizer_name": "TinyLlama/TinyLlama-1.1B",
+  "vocab_size": 32000
+}

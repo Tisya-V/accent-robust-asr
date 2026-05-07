@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N eval_whisper_ft_hoc
+#PBS -N eval_whisper_ft_hocv
 #PBS -l select=1:ngpus=1:ncpus=4:mem=16gb
 #PBS -l walltime=02:00:00
 #PBS -o logs/eval_whisper_ft_hoc.out
@@ -41,6 +41,6 @@ echo "python --version: $(python --version)"
 which python
 echo "====================="
 
-python -u -m src.training.evaluation.eval_whisper --models "baseline,whisper_finetuned"
+python -u -m src.training.evaluation.eval_whisper --models "whisper_finetuned_hoc, whisper_finetuned_hov" 
 
 echo "✅ Evaluation completed."

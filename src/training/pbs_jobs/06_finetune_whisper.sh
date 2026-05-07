@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N whisper_ft
-#PBS -l select=1:ngpus=1:ncpus=4:mem=24gb
+#PBS -N whisper_ft_hoc
+#PBS -l select=1:ngpus=1:ncpus=4:mem=16gb
 #PBS -l walltime=03:00:00
 #PBS -o logs/whisper_ft.out
 #PBS -e logs/whisper_ft.err
@@ -42,8 +42,9 @@ echo -e "\n\n==============================\n\n"
 echo "Starting Whisper Fine-Tuning (all L1s)..."
 
 python -u -m src.training.finetune_whisper \
-    --output_dir models/whisper_finetuned_all_l1s \
+    --output_dir models/whisper_finetuned_hoc \
     --epochs 10 \
-    --batch_size 16
+    --batch_size 16 \
+    --held_out_l1 Chinese
 
 echo "✅ Whisper fine-tuning completed."
