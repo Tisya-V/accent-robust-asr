@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N extract_encoder_states
-#PBS -l select=1:ngpus=1:mem=4gb
-#PBS -l walltime=00:40:00
+#PBS -l select=1:ngpus=1:ncpus=4:mem=32gb
+#PBS -l walltime=01:30:00
 #PBS -o logs/extract_encoder_states.out
 #PBS -e logs/extract_encoder_states.err
 #PBS -j oe
@@ -27,7 +27,6 @@ echo "=========================================="
 echo ""
 
 echo "[extract_encoder_states] Starting feature extraction..."
-python -m src.analysis.extract_encoder_states \
-    --output_dir "${EPHEMERAL_DATA_DIR:-/rds/general/user/tsv22/ephemeral}"
+python -m src.analysis.extract_encoder_states
 
 echo "✅ [extract_encoder_states] Done!"

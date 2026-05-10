@@ -186,7 +186,7 @@ def _load_cmu_arctic_utterances(
             stem = wav_path.stem
             text = transcript_map.get(stem, "")
             spk_utts.append({
-                "utterance_id": f"{speaker}_{stem}",
+                "utterance_id": stem,
                 "speaker": speaker.upper(),
                 "l1": "English",
                 "wav_path": str(wav_path),

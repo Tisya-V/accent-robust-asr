@@ -33,8 +33,8 @@ import torch
 import jiwer
 from tqdm import tqdm
 
-from src.config import LOCAL_L2ARCTIC_DIR
-from src.utils.load_l2arctic import load_test_utterances
+from src.config import LOCAL_L2ARCTIC_DIR, SPEAKER_L1, TEST_SPEAKERS
+from src.utils.load_l2arctic import load_test_utterances, load_train_dev_utterances
 from src.utils.model_loader import get_model_registry
 
 import os
@@ -250,12 +250,15 @@ def main():
                    help="Comma-separated keys from MODEL_REGISTRY")
     p.add_argument("--output_dir", default="results/model_perf_comparison")
     p.add_argument("--batch_size", type=int, default=BATCH_SIZE)
+    p.add_argument("--speakers",   default="test",
+                   help="'test' = TEST_SPEAKERS only (default); 'all' = all L2 speakers + CMU native")
     args = p.parse_args()
 
     model_keys = [k.strip() for k in args.models.split(",")]
 
     print(f"=== eval_model_perf  device={device} ===")
     print(f"    models  : {model_keys}")
+    print(f"    speakers: {args.speakers}")
 
     registry = get_model_registry(device)
     for key in model_keys:
@@ -264,8 +267,14 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    utts = load_test_utterances(local_root=args.data_root)
-    print(f"Testing with {len(utts):,} utterances")
+    if args.speakers == "all":
+        train, dev = load_train_dev_utterances(local_root=args.data_root, include_cmu_native=True)
+        test = load_test_utterances(local_root=args.data_root, include_cmu_native=True)
+        utts = train + dev + test
+        print(f"Evaluating on ALL speakers: {len(utts):,} utterances")
+    else:
+        utts = load_test_utterances(local_root=args.data_root)
+        print(f"Evaluating on TEST speakers: {len(utts):,} utterances")
 
     for key in model_keys:
         print(f"\n[Model: {key}]")

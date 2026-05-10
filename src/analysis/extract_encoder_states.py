@@ -1,14 +1,11 @@
 """
-Extract all 12 Whisper encoder layer outputs + phone-segment mean pools.
+Extract all 12 Whisper encoder layer outputs.
 
-Outputs: data/processed/probing/<split>/<SPEAKER>/<utterance_id>.pt
+Outputs: $EPHEMERAL/accent-robust-asr/probing/encoder_states/<split>/<SPEAKER>/<utterance_id>.pt
   Keys:
-    - layer_outputs: (12, T, 768) float32 — all encoder layer outputs
-    - phone_segments: list[dict] with keys:
-        - label: str (e.g. "AE")
-        - l1: str (e.g. "Arabic")
-        - speaker: str
-        - layer_reps: (12, 768) float32 — mean-pooled per layer across phone frames
+    - layer_outputs: (12, T, 768) float32 — all encoder layer outputs, all speakers
+
+Phone segment pooling is handled separately by postprocess_phone_segments.py.
 """
 
 import torch
@@ -23,15 +20,8 @@ from typing import List, Dict
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 import librosa
 
-from src.config import (
-    MODEL_ID,
-    SPEAKER_L1,
-    ENCODER_FRAME_RATE,
-    WHISPER_HIDDEN_DIM,
-    WHISPER_N_ENCODER_LAYERS,
-)
+from src.config import MODEL_ID
 from src.utils.load_l2arctic import load_train_dev_utterances, load_test_utterances
-from src.utils.textgrid import parse_textgrid
 
 
 def load_audio(wav_path: str, target_sr: int = 16000) -> np.ndarray:
@@ -74,51 +64,6 @@ def extract_encoder_outputs(
     return layer_outputs
 
 
-def extract_phone_segment_reps(
-    layer_outputs: torch.Tensor,  # (12, T, 768)
-    textgrid_path: str,
-    speaker: str,
-) -> List[Dict]:
-    """
-    Extract mean-pooled representations for each phone segment.
-
-    Args:
-        layer_outputs: (12, T, 768)
-        textgrid_path: path to forced-alignment TextGrid
-        speaker: speaker ID
-
-    Returns:
-        List of dicts with keys: label, l1, speaker, layer_reps (12, 768)
-    """
-    try:
-        phone_segments = parse_textgrid(textgrid_path, tier_name="phones")
-    except Exception as e:
-        print(f"  [WARN] Failed to parse TextGrid {textgrid_path}: {e}")
-        return []
-
-    l1 = SPEAKER_L1.get(speaker, "Unknown")
-    phone_reps = []
-
-    for seg in phone_segments:
-        start_frame = seg.start_frame
-        end_frame = seg.end_frame
-
-        # Clamp to valid range
-        T = layer_outputs.shape[1]
-        start_frame = max(0, min(start_frame, T - 1))
-        end_frame = max(start_frame + 1, min(end_frame, T))
-
-        # Mean-pool across frames for each layer
-        segment_reps = layer_outputs[:, start_frame:end_frame, :].mean(dim=1)  # (12, 768)
-
-        phone_reps.append({
-            "label": seg.label,
-            "l1": l1,
-            "speaker": speaker,
-            "layer_reps": segment_reps.cpu().numpy(),  # (12, 768) float32
-        })
-
-    return phone_reps
 
 
 def process_utterance(
@@ -129,7 +74,7 @@ def process_utterance(
     output_dir: Path,
 ) -> bool:
     """
-    Process a single utterance: extract encoder outputs + phone segments.
+    Process a single utterance: extract encoder outputs.
     Save to output_dir/<speaker>/<utterance_id>.pt atomically (temp file → rename).
 
     Returns True if successful, False otherwise.
@@ -137,12 +82,6 @@ def process_utterance(
     try:
         audio_array = load_audio(utt["wav_path"])
         layer_outputs = extract_encoder_outputs(audio_array, model, processor, device)
-
-        phone_reps = []
-        if utt["textgrid"]:
-            phone_reps = extract_phone_segment_reps(
-                layer_outputs, utt["textgrid"], utt["speaker"]
-            )
 
         speaker_dir = output_dir / utt["speaker"]
         speaker_dir.mkdir(parents=True, exist_ok=True)
@@ -152,7 +91,6 @@ def process_utterance(
 
         torch.save({
             "layer_outputs": layer_outputs.cpu(),  # (12, T, 768)
-            "phone_segments": phone_reps,
         }, temp_path)
 
         temp_path.rename(output_path)
@@ -181,10 +119,10 @@ def main(output_dir: str = None):
     model.eval()
     processor = WhisperProcessor.from_pretrained(MODEL_ID, local_files_only=True)
 
-    # Output directory (use EPHEMERAL if provided, else default to home dir)
+    # Output directory (use EPHEMERAL if set, default to data/)
     if output_dir is None:
-        output_dir = os.environ.get("EPHEMERAL", "data/processed/probing")
-    output_base = Path(output_dir) / "probing"
+        output_dir = os.environ.get("EPHEMERAL", "data/processed")
+    output_base = Path(output_dir) / "accent-robust-asr" / "probing" / "encoder_states"
     output_base.mkdir(parents=True, exist_ok=True)
     print(f"[extract_encoder_states] Output directory: {output_base}")
 

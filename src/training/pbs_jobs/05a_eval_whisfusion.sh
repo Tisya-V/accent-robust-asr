@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N eval_whisfusion_ft
-#PBS -l select=1:ngpus=1:ncpus=4:mem=24gb
+#PBS -N eval_whisfusion_ft_hov
+#PBS -l select=1:ngpus=1:ncpus=2:mem=24gb
 #PBS -l walltime=02:00:00
 #PBS -o logs/eval_whisfusion_ft.out
 #PBS -e logs/eval_whisfusion_ft.err
@@ -34,6 +34,6 @@ echo ""
 
 nvidia-smi
 
-python -u -m src.training.evaluation.eval_whisfusion --model whisfusion_finetuned
+python -u -m src.training.evaluation.eval_whisfusion --model whisfusion_finetuned_hov
 
 echo "✅ Evaluation completed."
