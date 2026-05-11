@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import argparse
 import re
+import pickle
 from pathlib import Path
 
 import pandas as pd
 import torch
 import jiwer
 from tqdm import tqdm
+import numpy as np
 
 from src.config import LOCAL_L2ARCTIC_DIR, MODELS_DIR
 from src.utils.load_l2arctic import load_test_utterances
@@ -114,6 +116,105 @@ class WhisfusionWrapper:
         best = max(candidates, key=lambda x: x["avg_confidence"])
         return best["text"].strip()
 
+    @torch.inference_mode()
+    def decode_with_internals(self, hidden_state, reference_text):
+        """Decode and capture per-step token sequences and confidences."""
+        tokenizer = self.model.tokenizer
+        config = self.model.config
+        model = self.model.model
+
+        bos = tokenizer.bos_token_id or 0
+        seq_len = 256
+        n_candidates = 15
+        n_steps = 4
+        mask_ratio_schedule = [1.0, 0.9, 0.85, 0.8]
+
+        # Initialize
+        target_ids = torch.full(
+            (seq_len,),
+            tokenizer.pad_token_id,
+            dtype=torch.long,
+            device=self.device
+        )
+        target_ids[0] = bos
+
+        mask_token_id = config.padded_vocab_size
+        device = hidden_state.device
+
+        # Setup batch
+        batch_size = n_candidates
+        input_for_mask = target_ids
+        batch_condition = hidden_state.unsqueeze(0).expand(n_candidates, -1, -1)
+
+        current_outputs = torch.full(
+            (n_candidates, seq_len),
+            mask_token_id,
+            dtype=input_for_mask.dtype,
+            device=device
+        )
+        current_outputs[:, 0] = input_for_mask[0]
+
+        # Capture per-step data
+        step_tokens_history = []
+        mask_history = []
+
+        # Generation steps
+        for step in range(n_steps):
+            mask_ratio = mask_ratio_schedule[step] if step < len(mask_ratio_schedule) else 0.7
+
+            if mask_ratio > 0:
+                rand_probs = torch.rand(batch_size, seq_len, device=device)
+                mask_indices_batch = rand_probs < mask_ratio
+                mask_indices_batch[:, 0] = False
+            else:
+                mask_indices_batch = torch.zeros((batch_size, seq_len), dtype=torch.bool, device=device)
+
+            masked_inputs = current_outputs.clone()
+            masked_inputs[mask_indices_batch] = mask_token_id
+
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                logits = model(idx=masked_inputs, condition=batch_condition)
+
+            if step == n_steps - 1:
+                probs = torch.softmax(logits, dim=-1)
+                max_probs, predicted_ids = torch.max(probs, dim=-1)
+                final_confidences = max_probs
+            else:
+                predicted_ids = torch.argmax(logits, dim=-1)
+
+            current_outputs = torch.where(mask_indices_batch, predicted_ids, masked_inputs)
+
+            # Save step data
+            step_tokens_history.append(current_outputs.cpu().clone())
+            mask_history.append(mask_indices_batch.cpu().clone())
+
+        # Postprocessing
+        all_outputs_cpu = current_outputs.cpu()
+        all_confidences_cpu = final_confidences.cpu()
+        all_texts = tokenizer.batch_decode(all_outputs_cpu, skip_special_tokens=True)
+
+        pad_id = tokenizer.pad_token_id
+        valid_mask = (all_outputs_cpu != pad_id)
+        masked_confidences = all_confidences_cpu * valid_mask.float()
+        avg_confidences = masked_confidences.sum(dim=1) / valid_mask.sum(dim=1).float().clamp(min=1)
+
+        # Find best candidate
+        best_idx = max(range(batch_size), key=lambda i: float(avg_confidences[i]))
+        best_text = all_texts[best_idx]
+
+        # Encode reference for alignment
+        ref_tokens = tokenizer.encode(norm(reference_text), add_special_tokens=False)
+        ref_tokens = torch.tensor(ref_tokens[:seq_len], dtype=torch.long)
+
+        # Return step data for best candidate
+        return {
+            'text': best_text.strip(),
+            'step_tokens': torch.stack([h[best_idx] for h in step_tokens_history]).numpy(),
+            'mask_history': torch.stack([h[best_idx] for h in mask_history]).numpy(),
+            'token_confidences': all_confidences_cpu[best_idx].float().numpy(),
+            'reference_tokens': ref_tokens.numpy(),
+        }
+
     # --------------------------------------------------
     # Public API
     # --------------------------------------------------
@@ -141,6 +242,37 @@ class WhisfusionWrapper:
         print(f"Decoded {len(results)} utterances.")
 
         return results
+
+    def transcribe_with_internals_batch(self, dataset, pt_paths):
+        """Transcribe and save decoder internals."""
+        results = []
+        internals_list = []
+
+        # preload everything once
+        print("\nPreloading hidden states into memory...")
+        hidden_states_list = []
+        for p in tqdm(pt_paths, desc="Loading hidden states"):
+            data = torch.load(p, map_location="cpu", weights_only=True)
+            hidden_states_list.append(data["hidden_states"])
+        print(f"Preloaded {len(hidden_states_list)} hidden states.")
+
+        print("\nTranscribing with Whisfusion (capturing internals)...")
+        for i, (d, hs) in enumerate(tqdm(zip(dataset, hidden_states_list), total=len(dataset), desc="Decoding")):
+            hs = hs.to(self.device)
+            result = self.decode_with_internals(hs, d["text"])
+            results.append(result['text'])
+            internals_list.append({
+                'utterance_id': d['utterance_id'],
+                'speaker': d['speaker'],
+                'l1': d['l1'],
+                'step_tokens': result['step_tokens'],
+                'mask_history': result['mask_history'],
+                'token_confidences': result['token_confidences'],
+                'reference_tokens': result['reference_tokens'],
+            })
+        print(f"Decoded {len(results)} utterances.")
+
+        return results, internals_list
 
 # ---------------------------------------------------------------------------
 # Load encoded features (for eval)
@@ -177,14 +309,30 @@ def build_pt_dataset(utterances, processed_root="data/processed/test"):
 # Evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate(dataset, model: WhisfusionWrapper):
+def evaluate(dataset, model: WhisfusionWrapper, save_decoder_internals=False, internals_dir=None):
     rows = []
 
     pt_paths = [d["pt_path"] for d in dataset]
-    predictions = model.transcribe_from_hidden_states_batch(pt_paths)
+
+    if save_decoder_internals:
+        predictions, internals_list = model.transcribe_with_internals_batch(dataset, pt_paths)
+
+        if internals_dir:
+            internals_dir = Path(internals_dir)
+            internals_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Saving decoder internals to {internals_dir}...")
+            for internals in internals_list:
+                speaker = internals['speaker']
+                utt_id = internals['utterance_id']
+                speaker_dir = internals_dir / speaker
+                speaker_dir.mkdir(parents=True, exist_ok=True)
+                save_path = speaker_dir / f"{utt_id}.pkl"
+                with open(save_path, 'wb') as f:
+                    pickle.dump(internals, f)
+    else:
+        predictions = model.transcribe_from_hidden_states_batch(pt_paths)
 
     assert len(predictions) == len(dataset)
-
 
     for d, pred in zip(dataset, predictions):
         ref = norm(d["text"])
@@ -238,6 +386,8 @@ def main():
     parser.add_argument("--output_dir", default="results/model_perf_comparison")
     parser.add_argument("--base_model_path", default="models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors")
     parser.add_argument("--model", default="whisfusion")
+    parser.add_argument("--save_decoder_internals", action="store_true", help="Save per-step decoder internals")
+    parser.add_argument("--internals_dir", default="results/e1_decoder_internals", help="Directory to save decoder internals")
 
     args = parser.parse_args()
 
@@ -247,7 +397,7 @@ def main():
     # check if eval files already exist
     output_file = f"{args.model}_predictions.csv"
     output_path = Path(args.output_dir) / output_file
-    if output_path.exists():
+    if output_path.exists() and not args.save_decoder_internals:
         print(f"  [skip] {output_path} already exists — delete to re-run")
         return
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -266,7 +416,12 @@ def main():
     )
 
     # run eval
-    df = evaluate(dataset, model)
+    df = evaluate(
+        dataset,
+        model,
+        save_decoder_internals=args.save_decoder_internals,
+        internals_dir=args.internals_dir if args.save_decoder_internals else None
+    )
 
     # save
     df.to_csv(output_path, index=False)
@@ -282,6 +437,8 @@ def main():
     print(f"MER: {corpus_measures.mer:.3f}")
     print(f"PER: {per:.3f}")
     print(f"Saved → {output_path}")
+    if args.save_decoder_internals:
+        print(f"Saved internals → {args.internals_dir}")
 
 
 if __name__ == "__main__":
