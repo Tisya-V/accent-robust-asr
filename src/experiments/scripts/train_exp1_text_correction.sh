@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=4:00:00
+#SBATCH --time=00:30:00
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.out
 
@@ -56,7 +56,8 @@ echo "Starting Experiment 1 training..."
 echo ""
 
 python -u -m src.experiments.exp1_text_correction.train \
-    --config src/experiments/exp1_text_correction/configs/phoneme_perturb_low.json  
+    --config src/experiments/exp1_text_correction/configs/phoneme_perturb_low.json  \
+    --device cuda
 
 echo ""
 echo "✅ Experiment 1 training finished."
