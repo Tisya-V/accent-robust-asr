@@ -1,9 +1,9 @@
 {
   "use_perturbation": true,
-  "perturb_prob": 0.10,
+  "perturb_prob": 0.5,
   "perturber_k": 10,
-  "visible_mask_ratio_low": 0.3,
-  "visible_mask_ratio_high": 0.7,
+  "mask_ratio_low": 0.3,
+  "mask_ratio_high": 0.7,
   "include_perturb_in_loss": true,
   "n_layers": 4,
   "n_embd": 256,
@@ -15,7 +15,8 @@
   "warmup_steps": 100,
   "max_length": 256,
   "data_root": "data/processed",
-  "results_dir": "results/experiment1_stage1/perturb_prob_0.10",
+  "results_dir": "results/experiment1_stage1",
+  "num_workers": 4,
   "tokenizer_name": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
   "vocab_size": 32000
 }
