@@ -58,12 +58,13 @@ def train_epoch(
     device: str,
     perturber: PhonemePerturber = None,
     perturb_prob: float = 0.15,
-    metric_interval: int = 50,
+    metric_interval: int = 20,
 ) -> Dict[str, float]:
-    """Run one training epoch. Detailed metrics computed every metric_interval batches."""
+    """Run one training epoch. Accuracy metrics computed every metric_interval batches."""
     model.train()
     total_loss = 0
-    total_acc = 0
+    acc_list = []
+    acc_perturbed_list = []
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
@@ -87,29 +88,31 @@ def train_epoch(
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        with torch.no_grad():
-            preds_visible = logits[visible_mask].argmax(dim=-1)
-            acc = (preds_visible == target_visible).float().mean()
-            total_acc += acc.item()
-
-            # Detailed metrics every N batches
-            acc_perturbed = 0.0
-            if (batch_idx + 1) % metric_interval == 0:
-                perturb_at_visible = perturb_mask[visible_mask]
-                if perturb_at_visible.any():
-                    acc_perturbed = (preds_visible[perturb_at_visible] == target_visible[perturb_at_visible]).float().mean().item()
-
         total_loss += loss.item()
         num_batches += 1
 
-        postfix = {"loss": f"{loss.item():.4f}", "acc": f"{acc.item():.4f}"}
-        if acc_perturbed > 0:
-            postfix["acc_pert"] = f"{acc_perturbed:.4f}"
+        postfix = {"loss": f"{loss.item():.4f}"}
+
+        # Compute accuracy metrics every N batches
+        if (batch_idx + 1) % metric_interval == 0:
+            with torch.no_grad():
+                preds_visible = logits_visible.argmax(dim=-1)
+                acc = (preds_visible == target_visible).float().mean().item()
+                acc_list.append(acc)
+                postfix["acc"] = f"{acc:.4f}"
+
+                perturb_at_visible = perturb_mask[visible_mask]
+                if perturb_at_visible.any():
+                    acc_pert = (preds_visible[perturb_at_visible] == target_visible[perturb_at_visible]).float().mean().item()
+                    acc_perturbed_list.append(acc_pert)
+                    postfix["acc_pert"] = f"{acc_pert:.4f}"
+
         pbar.set_postfix(postfix)
 
     avg_loss = total_loss / num_batches
-    avg_acc = total_acc / num_batches
-    return {"loss": avg_loss, "acc": avg_acc}
+    avg_acc = sum(acc_list) / len(acc_list) if acc_list else 0.0
+    avg_acc_pert = sum(acc_perturbed_list) / len(acc_perturbed_list) if acc_perturbed_list else 0.0
+    return {"loss": avg_loss, "acc": avg_acc, "acc_pert": avg_acc_pert}
 
 
 @torch.no_grad()
@@ -124,6 +127,7 @@ def validate(
     model.eval()
     total_loss = 0
     total_acc = 0
+    total_acc_pert = 0
     num_batches = 0
 
     for batch in tqdm(val_loader, desc="Validation"):
@@ -132,7 +136,7 @@ def validate(
         masked_ids = batch["masked_ids"].to(device)
         mask_indices = batch["mask_indices"].to(device)
 
-        noisy_ids, _ = forward_process(masked_ids, target_ids, mask_indices, perturber, perturb_prob)
+        noisy_ids, perturb_mask = forward_process(masked_ids, target_ids, mask_indices, perturber, perturb_prob)
 
         logits = model(noisy_ids, condition=condition)
         visible_mask = ~mask_indices
@@ -143,14 +147,20 @@ def validate(
 
         preds = logits_visible.argmax(dim=-1)
         acc = (preds == target_visible).float().mean()
+        total_acc += acc.item()
+
+        perturb_at_visible = perturb_mask[visible_mask]
+        if perturb_at_visible.any():
+            acc_pert = (preds[perturb_at_visible] == target_visible[perturb_at_visible]).float().mean()
+            total_acc_pert += acc_pert.item()
 
         total_loss += loss.item()
-        total_acc += acc.item()
         num_batches += 1
 
     avg_loss = total_loss / num_batches
     avg_acc = total_acc / num_batches
-    return {"loss": avg_loss, "acc": avg_acc}
+    avg_acc_pert = total_acc_pert / num_batches if total_acc_pert > 0 else 0.0
+    return {"loss": avg_loss, "acc": avg_acc, "acc_pert": avg_acc_pert}
 
 
 def main():
@@ -202,7 +212,7 @@ def main():
     config.save(results_dir / "config.json")
 
     csv_path = results_dir / "results.csv"
-    csv_headers = ["epoch", "train_loss", "train_acc", "val_loss", "val_acc"]
+    csv_headers = ["epoch", "train_loss", "train_acc", "train_acc_pert", "val_loss", "val_acc", "val_acc_pert"]
     csv_file = open(csv_path, "w", newline="")
     csv_writer = csv.DictWriter(csv_file, fieldnames=csv_headers)
     csv_writer.writeheader()
@@ -241,7 +251,6 @@ def main():
             device,
             perturber=perturber,
             perturb_prob=config.perturb_prob,
-            metric_interval=50,
         )
         val_metrics = validate(
             model,
@@ -252,15 +261,17 @@ def main():
         )
         scheduler.step()
 
-        print(f"[train] Train Loss: {train_metrics['loss']:.4f}, Acc: {train_metrics['acc']:.4f}")
-        print(f"[train] Val Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['acc']:.4f}")
+        print(f"[train] Train Loss: {train_metrics['loss']:.4f}, Acc: {train_metrics['acc']:.4f}, Acc_pert: {train_metrics['acc_pert']:.4f}")
+        print(f"[train] Val Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['acc']:.4f}, Acc_pert: {val_metrics['acc_pert']:.4f}")
 
         csv_writer.writerow({
             "epoch": epoch,
             "train_loss": train_metrics['loss'],
             "train_acc": train_metrics['acc'],
+            "train_acc_pert": train_metrics['acc_pert'],
             "val_loss": val_metrics['loss'],
             "val_acc": val_metrics['acc'],
+            "val_acc_pert": val_metrics['acc_pert'],
         })
         csv_file.flush()
 

@@ -88,7 +88,7 @@ def create_dataloaders(
     max_length: int = 256,
     data_root: str = "data/processed",
     mask_ratio_range: Tuple[float, float] = (0.7, 1.0),
-    num_workers: int = 4,
+    num_workers: int = 0,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader]:
     """
