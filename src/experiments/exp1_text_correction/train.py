@@ -11,6 +11,8 @@ from pathlib import Path
 from tqdm import tqdm
 import argparse
 from typing import Dict
+import csv
+import json
 
 from src.experiments.exp1_text_correction.config import Exp1Config
 from src.experiments.exp1_text_correction.model import create_mini_mdm
@@ -255,7 +257,7 @@ def main():
         tokenizer_name=config.tokenizer_name,
         max_length=config.max_length,
         data_root=config.data_root,
-        mask_ratio_range=(config.visible_mask_ratio_low, config.visible_mask_ratio_high),
+        mask_ratio_range=(config.mask_ratio_low, config.mask_ratio_high),
         num_workers=config.num_workers,
     )
     print(f"[train] Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
@@ -309,6 +311,21 @@ def main():
     results_dir = Path(config.results_dir) / Path(args.config).stem
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    # Save config for reference
+    config.save(results_dir / "config.json")
+
+    # CSV for tracking metrics across epochs
+    csv_path = results_dir / "results.csv"
+    csv_headers = [
+        "epoch", "train_loss", "train_acc_all", "train_acc_perturbed", "train_acc_clean",
+        "train_precision", "train_recall",
+        "val_loss", "val_acc_all", "val_acc_perturbed", "val_acc_clean",
+        "val_precision", "val_recall"
+    ]
+    csv_file = open(csv_path, "w", newline="")
+    csv_writer = csv.DictWriter(csv_file, fieldnames=csv_headers)
+    csv_writer.writeheader()
+
     best_val_loss = float("inf")
     print(f"[train] Results directory: {results_dir}")
 
@@ -339,6 +356,24 @@ def main():
         print(f"  Acc (all): {val_metrics['acc_all']:.4f}, Acc (perturbed): {val_metrics['acc_perturbed']:.4f}, Acc (clean): {val_metrics['acc_clean']:.4f}")
         print(f"  Precision: {val_metrics['precision']:.4f}, Recall: {val_metrics['recall']:.4f}")
 
+        # Log to CSV
+        csv_writer.writerow({
+            "epoch": epoch,
+            "train_loss": train_metrics['loss'],
+            "train_acc_all": train_metrics['acc_all'],
+            "train_acc_perturbed": train_metrics['acc_perturbed'],
+            "train_acc_clean": train_metrics['acc_clean'],
+            "train_precision": train_metrics['precision'],
+            "train_recall": train_metrics['recall'],
+            "val_loss": val_metrics['loss'],
+            "val_acc_all": val_metrics['acc_all'],
+            "val_acc_perturbed": val_metrics['acc_perturbed'],
+            "val_acc_clean": val_metrics['acc_clean'],
+            "val_precision": val_metrics['precision'],
+            "val_recall": val_metrics['recall'],
+        })
+        csv_file.flush()
+
         # Save checkpoint if best
         if val_metrics['loss'] < best_val_loss:
             best_val_loss = val_metrics['loss']
@@ -350,7 +385,9 @@ def main():
             }, checkpoint_path)
             print(f"[train] Saved checkpoint to {checkpoint_path}")
 
+    csv_file.close()
     print("\n[train] Done!")
+    print(f"[train] Results saved to {results_dir}")
 
 
 if __name__ == "__main__":

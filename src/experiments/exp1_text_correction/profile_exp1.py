@@ -32,7 +32,7 @@ def profile_training():
         tokenizer_name=config.tokenizer_name,
         max_length=config.max_length,
         data_root=config.data_root,
-        mask_ratio_range=(config.visible_mask_ratio_low, config.visible_mask_ratio_high),
+        mask_ratio_range=(config.mask_ratio_low, config.mask_ratio_high),
         num_workers=config.num_workers,
     )
 

@@ -1,6 +1,7 @@
 """
-Stage 1 evaluation: test MiniMDM as a token corrector in the decoding loop.
-Integrates with frozen SMDM decoder to compute WER with/without correction.
+Stage 1 evaluation: test MiniMDM token correction quality on test set.
+Evaluates using token accuracy (not WER).
+Measures: accuracy on perturbed vs clean tokens on the same distribution as training.
 """
 
 import torch
@@ -9,12 +10,15 @@ from pathlib import Path
 from tqdm import tqdm
 import argparse
 import numpy as np
+import random
+from collections import defaultdict
 
-from src.experiments.exp1_text_correction.config import Exp1Config
+from src.experiments.exp1_text_correction.config import Exp1Config, DEFAULT_TOKENIZER_NAME
 from src.experiments.exp1_text_correction.model import create_mini_mdm
+from src.experiments.exp1_text_correction.train import forward_process
+from src.utils.perturb_phonemes import PhonemePerturber
 from src.utils.load_l2arctic import load_test_utterances
-from transformers import WhisperProcessor
-import jiwer
+from transformers import AutoTokenizer
 
 
 def load_checkpoint(checkpoint_path: str, device: str):
@@ -36,106 +40,127 @@ def load_checkpoint(checkpoint_path: str, device: str):
     return model, config
 
 
-@torch.no_grad()
-def correct_tokens(
-    model: nn.Module,
-    noisy_tokens: torch.Tensor,
-    condition: torch.Tensor,
-    visible_mask: torch.Tensor,
-    device: str,
-) -> torch.Tensor:
-    """
-    Apply MiniMDM correction to visible tokens.
-
-    Args:
-        model: MiniMDM
-        noisy_tokens: (T,) token IDs (mix of tokens and mask_token_id)
-        condition: (1500, 768) Whisper encoder states
-        visible_mask: (T,) bool mask indicating visible positions
-        device: torch device
-
-    Returns:
-        corrected_tokens: (T,) with refined visible tokens
-    """
-    noisy_tokens = noisy_tokens.to(device).unsqueeze(0)  # (1, T)
-    condition = condition.to(device).unsqueeze(0)  # (1, 1500, 768)
-    visible_mask = visible_mask.to(device).unsqueeze(0)  # (1, T)
-
-    logits = model(noisy_tokens, condition=condition)  # (1, T, vocab_size)
-
-    # Replace visible positions with argmax predictions
-    preds = logits.argmax(dim=-1)  # (1, T)
-    corrected = noisy_tokens.clone()
-    corrected[visible_mask] = preds[visible_mask]
-
-    return corrected[0]  # (T,)
-
-
 def evaluate_test_set(
     model: nn.Module,
-    test_utterances,
+    test_utterances: list,
+    config: Exp1Config,
     data_root: str = "data/processed",
-    tokenizer_name: str = "TinyLlama/TinyLlama-1.1B",
     device: str = "cpu",
-):
+    perturber=None,
+) -> dict:
     """
     Evaluate MiniMDM on test set.
-    For now, just load encoder states + decode with greedy selection from MiniMDM logits.
-    (Full SMDM decoder integration deferred.)
+    Returns token accuracy metrics on perturbed vs clean tokens.
     """
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name, trust_remote_code=True)
     mask_token_id = tokenizer.mask_token_id or tokenizer.vocab_size
 
-    results = []
+    all_results = []
+    missing_count = 0
 
-    for utt in tqdm(test_utterances, desc="Evaluating"):
+    for utt in tqdm(test_utterances, desc="Evaluating test set"):
         speaker = utt["speaker"]
         split = utt["split"]
         utt_id = utt["utterance_id"]
 
-        # Load encoder states
+        # Load encoder states: data_root/split/speaker/utt_id.pt
         pt_path = Path(data_root) / split / speaker / f"{utt_id}.pt"
         if not pt_path.exists():
+            missing_count += 1
             continue
 
         data = torch.load(pt_path, map_location=device)
         condition = data["hidden_states"].float()  # (1500, 768)
 
         # Tokenize reference
-        ref_tokens = tokenizer.encode(utt["text"], add_special_tokens=False)
-        ref_tokens = torch.tensor(ref_tokens[:256], dtype=torch.long)
+        text = utt["text"]
+        tokens = tokenizer.encode(text, add_special_tokens=False)
+        tokens = torch.tensor(tokens, dtype=torch.long)
 
-        # Create fully masked input
-        T = len(ref_tokens)
-        masked_tokens = torch.full((T,), mask_token_id, dtype=torch.long)
-        visible_mask = torch.zeros(T, dtype=torch.bool)
+        # Truncate/pad to max_length
+        if len(tokens) > config.max_length:
+            tokens = tokens[:config.max_length]
+        elif len(tokens) < config.max_length:
+            tokens = torch.nn.functional.pad(
+                tokens, (0, config.max_length - len(tokens)),
+                value=tokenizer.pad_token_id
+            )
 
-        # Run correction (simple: just correct once)
-        corrected_tokens = correct_tokens(model, masked_tokens, condition, visible_mask, device)
+        target_ids = tokens.clone()
 
-        # Decode corrected tokens
-        predicted_text = tokenizer.decode(corrected_tokens.cpu().tolist(), skip_special_tokens=True)
+        # Create masked input: sample mask ratio from training range
+        mask_ratio = random.uniform(config.mask_ratio_low, config.mask_ratio_high)
+        mask_indices = torch.rand(config.max_length) < mask_ratio
+        masked_ids = tokens.clone()
+        masked_ids[mask_indices] = mask_token_id
 
-        # Compute WER
-        wer = jiwer.wer(utt["text"], predicted_text)
+        # Forward process: perturb visible tokens
+        noisy_ids, perturb_mask = forward_process(
+            masked_ids.unsqueeze(0),
+            target_ids.unsqueeze(0),
+            mask_indices.unsqueeze(0),
+            perturber=perturber,
+            perturb_prob=config.perturb_prob,
+        )
+        noisy_ids = noisy_ids[0]
+        perturb_mask = perturb_mask[0]
 
-        results.append({
-            "utterance_id": utt_id,
+        # Model forward pass
+        with torch.no_grad():
+            condition_batch = condition.unsqueeze(0).to(device)  # (1, 1500, 768)
+            noisy_batch = noisy_ids.unsqueeze(0).to(device)  # (1, max_length)
+            logits = model(noisy_batch, condition=condition_batch)  # (1, max_length, vocab_size)
+
+        # Evaluate on visible (non-masked) positions
+        visible_mask = ~mask_indices
+        if not visible_mask.any():
+            continue
+
+        # Get predictions on visible positions
+        preds_visible = logits[0, visible_mask].argmax(dim=-1)
+        target_visible = target_ids[visible_mask]
+        perturb_at_visible = perturb_mask[visible_mask]
+
+        # Compute accuracies
+        acc_all = (preds_visible == target_visible).float().mean().item()
+
+        if perturb_at_visible.any():
+            acc_perturbed = (
+                preds_visible[perturb_at_visible] == target_visible[perturb_at_visible]
+            ).float().mean().item()
+        else:
+            acc_perturbed = 1.0  # No perturbed tokens
+
+        if (~perturb_at_visible).any():
+            acc_clean = (
+                preds_visible[~perturb_at_visible] == target_visible[~perturb_at_visible]
+            ).float().mean().item()
+        else:
+            acc_clean = 1.0  # No clean tokens
+
+        all_results.append({
             "speaker": speaker,
-            "l1": utt["l1"],
-            "reference": utt["text"],
-            "prediction": predicted_text,
-            "wer": wer,
+            "l1": utt.get("l1", "unknown"),
+            "utterance_id": utt_id,
+            "acc_all": acc_all,
+            "acc_perturbed": acc_perturbed,
+            "acc_clean": acc_clean,
+            "num_visible": visible_mask.sum().item(),
+            "num_perturbed": perturb_at_visible.sum().item(),
         })
 
-    return results
+    if missing_count > 0:
+        print(f"[eval] WARNING: {missing_count} test utterances missing from {data_root}")
+
+    return {
+        "results": all_results,
+        "missing_count": missing_count,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to Stage 1 checkpoint")
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to best checkpoint")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--data_root", type=str, default="data/processed")
     args = parser.parse_args()
@@ -148,40 +173,82 @@ def main():
     model, config = load_checkpoint(args.checkpoint, device)
     print(f"[eval] Config: {config.to_dict()}")
 
+    # Load tokenizer and perturber
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name, trust_remote_code=True)
+    perturber = None
+    if config.use_perturbation:
+        perturber = PhonemePerturber(tokenizer, k=config.perturber_k)
+        perturber.to(device)
+        print(f"[eval] Loaded PhonemePerturber (k={config.perturber_k})")
+
     # Load test utterances
     print("[eval] Loading test utterances...")
     test_utts = load_test_utterances()
     print(f"[eval] Test utterances: {len(test_utts)}")
 
-    # Evaluate
-    print("[eval] Evaluating...")
-    results = evaluate_test_set(
+    # Evaluate on test set
+    print("\n[eval] Evaluating test set...")
+    eval_result = evaluate_test_set(
         model,
         test_utts,
+        config,
         data_root=args.data_root,
-        tokenizer_name=config.tokenizer_name,
         device=device,
+        perturber=perturber,
     )
+    results = eval_result["results"]
 
     # Report results
-    print("\n[eval] Results:")
-    print(f"  Evaluated: {len(results)} utterances")
+    print("\n" + "="*80)
+    print("TEST SET EVALUATION RESULTS")
+    print("="*80)
 
-    if results:
-        wers = [r["wer"] for r in results]
-        avg_wer = np.mean(wers)
-        print(f"  Average WER: {avg_wer:.4f}")
+    if not results:
+        print("[eval] No test results (all missing)")
+        return
 
-        # Per-L1
-        from collections import defaultdict
-        by_l1 = defaultdict(list)
-        for r in results:
-            by_l1[r["l1"]].append(r["wer"])
+    print(f"\nEvaluated: {len(results)} utterances")
 
-        print("\n  Per-L1 WER:")
-        for l1 in sorted(by_l1.keys()):
-            wers_l1 = by_l1[l1]
-            print(f"    {l1}: {np.mean(wers_l1):.4f} ({len(wers_l1)} utts)")
+    # Overall accuracies
+    acc_all_list = [r["acc_all"] for r in results]
+    acc_perturbed_list = [r["acc_perturbed"] for r in results]
+    acc_clean_list = [r["acc_clean"] for r in results]
+
+    print(f"\nToken Accuracy:")
+    print(f"  All visible tokens: {np.mean(acc_all_list):.4f} ± {np.std(acc_all_list):.4f}")
+    print(f"  Perturbed tokens:   {np.mean(acc_perturbed_list):.4f} ± {np.std(acc_perturbed_list):.4f}")
+    print(f"  Clean tokens:       {np.mean(acc_clean_list):.4f} ± {np.std(acc_clean_list):.4f}")
+
+    # Per-L1 breakdown
+    by_l1 = defaultdict(list)
+    for r in results:
+        by_l1[r["l1"]].append(r["acc_all"])
+
+    print(f"\nPer-L1 Accuracy (all tokens):")
+    for l1 in sorted(by_l1.keys()):
+        accs = by_l1[l1]
+        print(f"  {l1}: {np.mean(accs):.4f} ± {np.std(accs):.4f} ({len(accs)} utts)")
+
+    # Per-speaker breakdown
+    by_speaker = defaultdict(list)
+    for r in results:
+        by_speaker[r["speaker"]].append(r["acc_all"])
+
+    if len(by_speaker) > 10:
+        print(f"\nTop/bottom 5 speakers (by accuracy):")
+        speaker_means = {sp: np.mean(accs) for sp, accs in by_speaker.items()}
+        sorted_speakers = sorted(speaker_means.items(), key=lambda x: x[1])
+        print(f"  Bottom 5:")
+        for sp, acc in sorted_speakers[:5]:
+            print(f"    {sp}: {acc:.4f}")
+        print(f"  Top 5:")
+        for sp, acc in sorted_speakers[-5:]:
+            print(f"    {sp}: {acc:.4f}")
+    else:
+        print(f"\nPer-speaker Accuracy (all tokens):")
+        for sp in sorted(by_speaker.keys()):
+            accs = by_speaker[sp]
+            print(f"  {sp}: {np.mean(accs):.4f} ± {np.std(accs):.4f} ({len(accs)} utts)")
 
 
 if __name__ == "__main__":

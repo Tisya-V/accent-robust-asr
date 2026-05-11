@@ -16,8 +16,8 @@ class Exp1Config:
     use_perturbation: bool = True
     perturb_prob: float = 0.15           # probability of perturbing a visible token
     perturber_k: int = 10                # k nearest phonemic neighbours
-    visible_mask_ratio_low: float = 0.3  # min fraction of tokens to keep visible
-    visible_mask_ratio_high: float = 0.7 # max fraction of tokens to keep visible
+    mask_ratio_low: float = 0.3          # min fraction of tokens to mask
+    mask_ratio_high: float = 0.7         # max fraction of tokens to mask
     include_perturb_in_loss: bool = True # weight perturbed tokens higher in loss
 
     # Model size (MiniMDM)
