@@ -55,8 +55,11 @@ echo ""
 echo "Starting Experiment 1 training..."
 echo ""
 
+# Use config from command line arg, or default to phoneme_perturb_low
+CONFIG="${1:-src/experiments/exp1_text_correction/configs/phoneme_perturb_low.json}"
+
 python -u -m src.experiments.exp1_text_correction.train \
-    --config src/experiments/exp1_text_correction/configs/phoneme_perturb_low.json  \
+    --config "$CONFIG" \
     --device cuda
 
 echo ""
