@@ -1,6 +1,0 @@
-results/embedding_cache/baseline_embeddings.pkl
-results/embedding_cache/ctc_aux_l3_embeddings.pkl
-results/embedding_cache/ctc_aux_l7_embeddings.pkl
-results/embedding_cache/feat_aux0p3_embeddings.pkl
-results/embedding_cache/feat_aux_embeddings.pkl
-results/embedding_cache/no_aux_embeddings.pkl
