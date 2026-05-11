@@ -54,7 +54,7 @@ class PhonemePerturber:
         t0 = time.time()
         if self.cache_path.exists():
             logger.info(f"Loading phoneme neighbour table from cache: {self.cache_path}")
-            payload = torch.load(self.cache_path, map_location="cpu")
+            payload = torch.load(self.cache_path, map_location="cpu", weights_only=False)
             self.neighbour_table = payload["neighbour_table"]
             self.phonemisable_count = payload.get("phonemisable_count", 0)
             self.phonemisable_tokens = payload.get("phonemisable_tokens", {})

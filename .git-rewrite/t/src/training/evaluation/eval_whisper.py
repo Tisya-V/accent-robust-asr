@@ -1,0 +1,278 @@
+"""
+eval_model_perf.py
+Inference + WER/PER computation across models.
+Designed to run as a SLURM job — results cached to CSV for notebook visualisation.
+
+Scripted     → 6 held-out test speakers, never seen during training.
+Spontaneous  → suitcase corpus (OOD, all speakers).
+
+WER: word error rate on normalised text.
+PER: phoneme error rate — G2P(prediction) vs G2P(reference), both via g2p_en.
+     (text-derived, labels as "PER (G2P)" in reporting)
+
+Usage:
+    python eval_model_perf.py --models baseline,baseline_lora 
+    python eval_model_perf.py --models ctc_aux
+
+    # Via SLURM:
+    sbatch --gres=gpu:1 --wrap="python eval_model_perf.py --models baseline,baseline_lora"
+
+Output:
+    results/model_perf_comparison/{model_key}_predictions.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+from pathlib import Path
+
+import pandas as pd
+import numpy as np
+import torch
+import jiwer
+from tqdm import tqdm
+
+from src.config import LOCAL_L2ARCTIC_DIR
+from src.utils.load_l2arctic import load_test_utterances
+from src.utils.model_loader import get_model_registry
+
+import os
+import nltk
+
+# Download required NLTK data if missing (to NLTK_DATA directory)
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+except LookupError:
+    nltk_data_dir = os.environ.get('NLTK_DATA')
+    print(f"Downloading NLTK averaged_perceptron_tagger_eng to {nltk_data_dir}...")
+    nltk.download('averaged_perceptron_tagger_eng', download_dir=nltk_data_dir)
+
+import g2p_en
+
+BATCH_SIZE = 16
+
+_G2P = g2p_en.G2p()
+
+def text_to_phones(text: str) -> list[str]:
+    """Normalised text → ARPAbet phone list (stress digits stripped)."""
+    raw = _G2P(text)
+    return [p.rstrip("012") for p in raw if p.strip() and p[0].isalpha()]
+
+
+def utt_per(ref: str, pred: str) -> float | None:
+    """G2P-derived phoneme error rate for one utterance."""
+    if not ref:
+        return None
+    ref_phones  = " ".join(text_to_phones(ref))
+    pred_phones = " ".join(text_to_phones(pred))
+    if not ref_phones:
+        return None
+    return float(jiwer.wer(ref_phones, pred_phones))
+
+
+# ---------------------------------------------------------------------------
+# Text normalisation
+# ---------------------------------------------------------------------------
+
+def norm(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    s = s.lower().strip()
+    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"\s+",     " ", s).strip()
+    return s
+
+
+# ---------------------------------------------------------------------------
+# Inference
+# ---------------------------------------------------------------------------
+
+def transcribe(
+    utterances: list[dict],
+    processor,
+    model,
+    device:     str,
+    batch_size: int = BATCH_SIZE,
+) -> list[str]:
+    import librosa
+    import soundfile as sf
+
+    predictions = []
+    pbar = tqdm(range(0, len(utterances), batch_size),
+                desc="  transcribing", unit="batch", dynamic_ncols=True)
+    for start in pbar:
+        batch  = utterances[start : start + batch_size]
+        audios = []
+        for utt in batch:
+            audio, sr = sf.read(utt["wav_path"], dtype="float32", always_2d=False)
+            if sr != 16000:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+            
+            audios.append(audio)
+
+        if not audios:
+            continue
+        inputs = processor(
+            audios, sampling_rate=16000,
+            return_tensors="pt", truncation=True, return_attention_mask=True,
+        )
+        with torch.no_grad():
+            pred_ids = model.generate(
+                inputs.input_features.to(device),
+                attention_mask=inputs.attention_mask.to(device),
+                language="en", 
+                task="transcribe",
+                # no_repeat_ngram_size=3,
+                # repetition_penalty=1.1,
+                temperature=0.0,
+                
+            )
+        predictions.extend(processor.batch_decode(pred_ids, skip_special_tokens=True))
+    return predictions
+
+# def transcribe_long(audio, processor, model, device, chunk_s=28):
+#     # note that this has hard cutoffs
+#     # so may split words and stuff
+#     # but this would be like max 4-8 words in a very long 1/2 min utterance
+#     # so mostly hidden but worth noting
+#     sr       = 16000
+#     chunk_len = chunk_s * sr
+
+#     if len(audio) <= chunk_len:
+#         inputs = processor(audio, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
+#         with torch.no_grad():
+#             ids = model.generate(
+#                 inputs.input_features.to(device),
+#                 attention_mask=inputs.attention_mask.to(device),
+#                 language="en", task="transcribe", temperature=0.0,
+#             )
+#         return processor.decode(ids[0], skip_special_tokens=True).strip()
+
+#     parts = []
+#     for start in range(0, len(audio), chunk_len):
+#         chunk = audio[start : start + chunk_len]
+#         if len(chunk) < sr:  # skip sub-1s tail
+#             break
+#         inputs = processor(chunk, sampling_rate=sr, return_tensors="pt", return_attention_mask=True)
+#         with torch.no_grad():
+#             ids = model.generate(
+#                 inputs.input_features.to(device),
+#                 attention_mask=inputs.attention_mask.to(device),
+#                 language="en", task="transcribe", temperature=0.0,
+#             )
+#         parts.append(processor.decode(ids[0], skip_special_tokens=True).strip())
+
+#     return " ".join(parts)
+
+# ---------------------------------------------------------------------------
+# Results assembly
+# ---------------------------------------------------------------------------
+
+def build_results(utterances: list[dict], predictions: list[str]) -> pd.DataFrame:
+    rows = []
+    for utt, pred in zip(utterances, predictions):
+        ref = norm(utt["text"])
+        pred_n = norm(pred)
+
+        word_measures = jiwer.process_words(ref, pred_n) if ref else None
+
+        rows.append({
+            "utterance_id":    utt["utterance_id"],
+            "speaker":         utt["speaker"],
+            "l1":              utt["l1"],
+            "domain":          utt["domain"],
+            "wav_path":        utt["wav_path"],
+            "text":            utt["text"],
+            "prediction":      pred,
+            "reference_norm":  ref,
+            "prediction_norm": pred_n,
+            "ref_num_words":   len(ref.split()),
+            "utt_wer":         float(word_measures.wer) if word_measures else None,
+            "utt_mer":         float(word_measures.mer) if word_measures else None,
+            "utt_per":         utt_per(ref, pred_n),
+        })
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# per-model runner
+# ---------------------------------------------------------------------------
+
+def run_one(
+    model_key:  str,
+    utterances: list[dict],
+    registry:   dict,
+    device:     str,
+    output_dir: str,
+) -> None:
+    out_path = Path(output_dir) / f"{model_key}_predictions.csv"
+    if out_path.exists():
+        print(f"  [skip] {out_path} already exists — delete to re-run")
+        return
+
+    print(f"  Loading model [{model_key}] ...")
+    model, processor = registry[model_key]["loader"]()
+    model.eval()
+
+    print(f"  Transcribing {len(utterances):,} utterances ...")
+    preds   = transcribe(utterances, processor, model, device)
+    results = build_results(utterances, preds)
+    results.to_csv(out_path, index=False)
+
+    corpus_measures = jiwer.process_words(
+        results["reference_norm"].tolist(),
+        results["prediction_norm"].tolist(),
+    )
+
+    wer = float(corpus_measures.wer)
+    mer = float(corpus_measures.mer)
+
+    per_vals = results["utt_per"].dropna()
+    per_str = f"  PER={per_vals.mean():.3f}" if len(per_vals) else "  PER=n/a"
+
+    print(f"  WER={wer:.3f}  MER={mer:.3f}{per_str}  →  {out_path}")
+
+    del model
+    torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--data_root",  default=LOCAL_L2ARCTIC_DIR)
+    p.add_argument("--models",     default="baseline",
+                   help="Comma-separated keys from MODEL_REGISTRY")
+    p.add_argument("--output_dir", default="results/model_perf_comparison")
+    p.add_argument("--batch_size", type=int, default=BATCH_SIZE)
+    args = p.parse_args()
+
+    model_keys = [k.strip() for k in args.models.split(",")]
+
+    print(f"=== eval_model_perf  device={device} ===")
+    print(f"    models  : {model_keys}")
+
+    registry = get_model_registry(device)
+    for key in model_keys:
+        if key not in registry:
+            raise ValueError(f"Unknown model \'{key}\'. Available: {sorted(registry)}")
+
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    utts = load_test_utterances(local_root=args.data_root)
+    print(f"Testing with {len(utts):,} utterances")
+
+    for key in model_keys:
+        print(f"\n[Model: {key}]")
+        run_one(key, utts, registry, device, args.output_dir)
+
+    print("\nAll done.")
+
+
+if __name__ == "__main__":
+    main()

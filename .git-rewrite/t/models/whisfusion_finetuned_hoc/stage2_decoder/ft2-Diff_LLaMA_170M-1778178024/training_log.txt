@@ -1,0 +1,15 @@
+Epoch 1 | Train Loss: 0.0416 | Val Loss: 0.0546 | WER: 0.1383 | CER: 0.0900 | LR: 1.93e-06 -> validation loss improved.
+Epoch 2 | Train Loss: 0.0392 | Val Loss: 0.0552 | WER: 0.1322 | CER: 0.0850 | LR: 3.79e-06 -> validation loss did not improve. Patience: 1/5
+Epoch 3 | Train Loss: 0.0379 | Val Loss: 0.0502 | WER: 0.1228 | CER: 0.0785 | LR: 5.64e-06 -> validation loss improved.
+Epoch 4 | Train Loss: 0.0362 | Val Loss: 0.0511 | WER: 0.1256 | CER: 0.0829 | LR: 7.50e-06 -> validation loss did not improve. Patience: 1/5
+Epoch 5 | Train Loss: 0.0344 | Val Loss: 0.0518 | WER: 0.1202 | CER: 0.0765 | LR: 7.49e-06 -> validation loss did not improve. Patience: 2/5
+Epoch 6 | Train Loss: 0.0311 | Val Loss: 0.0491 | WER: 0.1162 | CER: 0.0742 | LR: 7.44e-06 -> validation loss improved.
+Epoch 7 | Train Loss: 0.0300 | Val Loss: 0.0466 | WER: 0.1194 | CER: 0.0728 | LR: 7.37e-06 -> validation loss improved.
+Epoch 8 | Train Loss: 0.0270 | Val Loss: 0.0448 | WER: 0.1114 | CER: 0.0753 | LR: 7.28e-06 -> validation loss improved.
+Epoch 9 | Train Loss: 0.0243 | Val Loss: 0.0430 | WER: 0.1050 | CER: 0.0655 | LR: 7.15e-06 -> validation loss improved.
+Epoch 10 | Train Loss: 0.0231 | Val Loss: 0.0454 | WER: 0.1137 | CER: 0.0728 | LR: 7.00e-06 -> validation loss did not improve. Patience: 1/5
+Epoch 11 | Train Loss: 0.0205 | Val Loss: 0.0399 | WER: 0.1078 | CER: 0.0653 | LR: 6.83e-06 -> validation loss improved.
+Epoch 12 | Train Loss: 0.0183 | Val Loss: 0.0401 | WER: 0.1122 | CER: 0.0657 | LR: 6.63e-06 -> validation loss did not improve. Patience: 1/5
+Epoch 13 | Train Loss: 0.0176 | Val Loss: 0.0403 | WER: 0.0941 | CER: 0.0588 | LR: 6.41e-06 -> validation loss did not improve. Patience: 2/5
+Epoch 14 | Train Loss: 0.0158 | Val Loss: 0.0367 | WER: 0.1028 | CER: 0.0639 | LR: 6.17e-06 -> validation loss improved.
+Epoch 15 | Train Loss: 0.0144 | Val Loss: 0.0393 | WER: 0.1116 | CER: 0.0668 | LR: 5.92e-06 -> validation loss did not improve. Patience: 1/5

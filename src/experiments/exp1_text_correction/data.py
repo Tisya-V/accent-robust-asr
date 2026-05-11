@@ -48,7 +48,8 @@ class Exp1Dataset(Dataset):
         pt_path = self.pt_files[idx]
 
         # Load .pt file: {hidden_states, transcript}
-        data = torch.load(pt_path, map_location="cpu")
+        # Always load on CPU when using num_workers (CUDA doesn't fork well)
+        data = torch.load(pt_path, map_location="cpu", weights_only=False)
         condition = data["hidden_states"].float()  # (1500, 768)
         text = data["transcript"]  # str
 
@@ -87,6 +88,7 @@ def create_dataloaders(
     max_length: int = 256,
     data_root: str = "data/processed",
     mask_ratio_range: Tuple[float, float] = (0.7, 1.0),
+    num_workers: int = 4,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader]:
     """
@@ -115,7 +117,7 @@ def create_dataloaders(
         mask_ratio_range=mask_ratio_range,
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     return train_loader, val_loader

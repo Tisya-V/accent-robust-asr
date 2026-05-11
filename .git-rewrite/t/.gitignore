@@ -1,0 +1,41 @@
+# Python stuff
+__pycache__/
+__pypackages__/
+
+# Environments
+.env
+.venv
+env/
+.vscode/
+
+# Project artifacts
+/data/
+logs/*
+!logs/.gitkeep
+output/*
+!output/.gitkeep
+*.ipynb_checkpoints/
+
+# Audio and model files
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Notebook cache
+src/notebooks/.ipynb_checkpoints/
+models/*/checkpoint-*/
+
+# Remove results from gitignore whilst we're still cooking
+# results/
+nltk_data/
+archive/
+hpsearch/*/trials/
+
+*.md
+.claude/
+claude-files/   
