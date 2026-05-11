@@ -1,6 +1,6 @@
 {
   "use_perturbation": true,
-  "perturb_prob": 0.1,
+  "perturb_prob": 0.10,
   "perturber_k": 10,
   "visible_mask_ratio_low": 0.3,
   "visible_mask_ratio_high": 0.7,
@@ -15,7 +15,7 @@
   "warmup_steps": 100,
   "max_length": 256,
   "data_root": "data/processed",
-  "results_dir": "results/experiment1_stage1",
+  "results_dir": "results/experiment1_stage1/perturb_prob_0.10",
   "tokenizer_name": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
   "vocab_size": 32000
 }

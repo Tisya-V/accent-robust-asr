@@ -36,6 +36,7 @@ class Exp1Config:
     # Data
     data_root: str = "data/processed"
     results_dir: str = "results/experiment1_stage1"
+    num_workers: int = 4
 
     # Tokenizer / vocab
     tokenizer_name: str = DEFAULT_TOKENIZER_NAME

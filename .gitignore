@@ -31,7 +31,7 @@ src/notebooks/.ipynb_checkpoints/
 models/*/checkpoint-*/
 
 # Remove results from gitignore whilst we're still cooking
-results/
+results/embedding_cache/
 /nltk_data/
 archive/
 hpsearch/*/trials/
