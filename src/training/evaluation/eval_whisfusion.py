@@ -73,11 +73,12 @@ def utt_per(ref: str, pred: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 class WhisfusionWrapper:
-    def __init__(self, base_model_path, adapter_path, device="cuda", batch_size=8):
+    def __init__(self, base_model_path, adapter_path, device="cuda", batch_size=8, mask_ratio_schedule=None):
         from models.whisfusion.src.evaluation.evaluate_whisfusion import WhisfusionBenchmark
 
         self.device = device
         self.batch_size = batch_size
+        self.mask_ratio_schedule = mask_ratio_schedule or [1.0, 0.9, 0.85, 0.8]
 
         self.model = WhisfusionBenchmark(
             base_model_path=base_model_path,
@@ -110,7 +111,7 @@ class WhisfusionWrapper:
             hidden_state.unsqueeze(0),  # keep batch dim
             n_candidates=15,
             n_steps=4,
-            mask_ratio_schedule=[1.0, 0.9, 0.85, 0.8],
+            mask_ratio_schedule=self.mask_ratio_schedule,
         )
 
         best = max(candidates, key=lambda x: x["avg_confidence"])
@@ -127,7 +128,7 @@ class WhisfusionWrapper:
         seq_len = 256
         n_candidates = 15
         n_steps = 4
-        mask_ratio_schedule = [1.0, 0.9, 0.85, 0.8]
+        mask_ratio_schedule = self.mask_ratio_schedule
 
         # Initialize
         target_ids = torch.full(
@@ -248,17 +249,12 @@ class WhisfusionWrapper:
         results = []
         internals_list = []
 
-        # preload everything once
-        print("\nPreloading hidden states into memory...")
-        hidden_states_list = []
-        for p in tqdm(pt_paths, desc="Loading hidden states"):
-            data = torch.load(p, map_location="cpu", weights_only=True)
-            hidden_states_list.append(data["hidden_states"])
-        print(f"Preloaded {len(hidden_states_list)} hidden states.")
-
         print("\nTranscribing with Whisfusion (capturing internals)...")
-        for i, (d, hs) in enumerate(tqdm(zip(dataset, hidden_states_list), total=len(dataset), desc="Decoding")):
-            hs = hs.to(self.device)
+        for d, pt_path in tqdm(zip(dataset, pt_paths), total=len(dataset), desc="Decoding"):
+            # Load hidden states on-demand (stream, not preload)
+            data = torch.load(pt_path, map_location="cpu", weights_only=True)
+            hs = data["hidden_states"].to(self.device)
+
             result = self.decode_with_internals(hs, d["text"])
             results.append(result['text'])
             internals_list.append({
@@ -388,14 +384,20 @@ def main():
     parser.add_argument("--model", default="whisfusion")
     parser.add_argument("--save_decoder_internals", action="store_true", help="Save per-step decoder internals")
     parser.add_argument("--internals_dir", default="results/e1_decoder_internals", help="Directory to save decoder internals")
+    parser.add_argument("--mask_ratio_schedule", default="1.0,0.9,0.85,0.8", help="Comma-separated mask ratios per step (e.g., '1.0,0.9,0.85,0.8' or '0.9,0.7,0.5,0.3')")
 
     args = parser.parse_args()
+
+    # Parse mask schedule
+    mask_ratio_schedule = [float(x) for x in args.mask_ratio_schedule.split(',')]
+    print(f"Using mask schedule: {mask_ratio_schedule}")
 
     print(f"Device: {device}")
 
     adapter_path = _find_stage2_decoder_pt(f"{MODELS_DIR}/{args.model}")
     # check if eval files already exist
-    output_file = f"{args.model}_predictions.csv"
+    schedule_suffix = "_".join([str(x).replace(".", "") for x in mask_ratio_schedule])
+    output_file = f"{args.model}_mask{schedule_suffix}_predictions.csv"
     output_path = Path(args.output_dir) / output_file
     if output_path.exists() and not args.save_decoder_internals:
         print(f"  [skip] {output_path} already exists — delete to re-run")
@@ -412,7 +414,8 @@ def main():
     model = WhisfusionWrapper(
         base_model_path=args.base_model_path,
         adapter_path=adapter_path,
-        device=device
+        device=device,
+        mask_ratio_schedule=mask_ratio_schedule
     )
 
     # run eval

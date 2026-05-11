@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N e1_eval_decoder_internals
 #PBS -l select=1:ngpus=1:ncpus=4:mem=32gb
-#PBS -l walltime=00:30:00
+#PBS -l walltime=03:00:00
 #PBS -o logs/e1_eval_decoder_internals.out
 #PBS -e logs/e1_eval_decoder_internals.err
 #PBS -j oe
@@ -38,7 +38,8 @@ echo ""
 python -u -m src.training.evaluation.eval_whisfusion \
   --save_decoder_internals \
   --internals_dir results/e1_decoder_internals \
-  --model whisfusion_finetuned
+  --model whisfusion_finetuned \
+  --mask_ratio_schedule "0.9,0.7,0.5,0.3"
 
 echo ""
 echo "✅ Evaluation with decoder internals completed."
