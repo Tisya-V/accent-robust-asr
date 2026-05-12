@@ -16,7 +16,7 @@ CONFIGS=(
   "medium_perturb_medium_masking.json"
   "max_perturb_high_masking.json"
   "max_perturb_medium_masking.json"
-  "phoneme_perturb_low.json"
+  "low_perturb_medium_masking.json"
 )
 
 echo "========================================"
