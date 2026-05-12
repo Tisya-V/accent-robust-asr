@@ -87,19 +87,26 @@ def create_dataloaders(
     tokenizer_name: str = DEFAULT_TOKENIZER_NAME,
     max_length: int = 256,
     data_root: str = "data/processed",
+    train_root: str = None,
+    val_root: str = None,
     mask_ratio_range: Tuple[float, float] = (0.7, 1.0),
     num_workers: int = 0,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation dataloaders.
-    Scans data_root for .pt files, splits by train/dev directories.
+    If train_root/val_root provided, use them directly.
+    Otherwise, scans data_root for train/ and dev/ subdirectories.
     """
-    data_root = Path(data_root)
-
-    # Collect .pt files from train/ and dev/
-    train_files = sorted((data_root / "train").rglob("*.pt"))
-    dev_files = sorted((data_root / "dev").rglob("*.pt"))
+    if train_root and val_root:
+        # Use explicit train/val directories (separate paths)
+        train_files = sorted(Path(train_root).rglob("*.pt"))
+        dev_files = sorted(Path(val_root).rglob("*.pt"))
+    else:
+        # Use data_root with train/ and dev/ subdirs
+        data_root = Path(data_root)
+        train_files = sorted((data_root / "train").rglob("*.pt"))
+        dev_files = sorted((data_root / "dev").rglob("*.pt"))
 
     print(f"[create_dataloaders] Found {len(train_files)} train, {len(dev_files)} dev utterances")
 

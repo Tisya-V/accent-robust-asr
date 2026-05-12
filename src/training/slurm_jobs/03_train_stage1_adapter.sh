@@ -18,7 +18,7 @@
 set -e
 
 # Source centralized environment configuration
-source scripts/env.sh
+source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
 
@@ -55,8 +55,8 @@ echo "Starting Stage 1: Adapter Training..."
 fabric run src/training/train_stage1_adapter.py \
     --strategy=ddp \
     --devices=1 \
-    --train_data_dir "${DATA_DIR}/processed/train/" \
-    --val_data_dir   "${DATA_DIR}/processed/dev/" \
+    --train_data_dir "${TRAIN_DATA_DIR}" \
+    --val_data_dir   "${DEV_DATA_DIR}" \
     --pretrain_path  "${MODELS_DIR}/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors" \
     --out_dir        "${MODELS_DIR}/whisfusion_finetuned/stage1_adapter/ft-Diff_LLaMA_170M-1777965131" \
     --resume \

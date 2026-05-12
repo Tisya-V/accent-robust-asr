@@ -24,7 +24,7 @@ from tqdm import tqdm
 from typing import List, Dict
 import numpy as np
 
-from src.config import SPEAKER_L1, ENCODER_FRAME_RATE
+from src.config import SPEAKER_L1, ENCODER_FRAME_RATE, LOCAL_L2ARCTIC_DIR
 from src.utils.load_l2arctic import load_train_dev_utterances, load_test_utterances
 from src.utils.textgrid import parse_textgrid
 
@@ -189,7 +189,7 @@ def main(encoder_dir: str = None, output_dir: str = None):
     encoder_base.mkdir(parents=True, exist_ok=True)
     output_base.mkdir(parents=True, exist_ok=True)
 
-    l2arctic_root = Path("data/l2_arctic")
+    l2arctic_root = LOCAL_L2ARCTIC_DIR
     cmu_arctic_root = Path("data/cmu_arctic")
 
     print(f"[postprocess_phone_segments] Encoder states: {encoder_base}")

@@ -3,7 +3,7 @@
 #
 # Usage: bash src/experiments/scripts/pbs/sweep_exp1_text_correction.sh
 
-source /rds/general/user/tsv22/home/accent-robust-asr/scripts/env.sh
+source scripts/pbs_env.sh
 
 cd "$PROJECT_ROOT"
 

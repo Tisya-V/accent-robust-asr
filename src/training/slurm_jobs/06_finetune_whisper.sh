@@ -18,7 +18,7 @@
 set -e
 
 # Source centralized environment configuration
-source scripts/env.sh
+source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
 

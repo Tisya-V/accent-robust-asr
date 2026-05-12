@@ -12,7 +12,7 @@
 # OR with config file argument:
 # 2. qsub -v CONFIG=configs/my_config.json src/experiments/scripts/pbs/train_exp1_text_correction.sh
 
-source /rds/general/user/tsv22/home/accent-robust-asr/scripts/env.sh
+source "${PBS_O_WORKDIR}/scripts/pbs_env.sh"
 
 cd "$PROJECT_ROOT"
 

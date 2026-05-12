@@ -5,8 +5,8 @@
 
 set -e
 
-PROJECT_ROOT="/vol/bitbucket/tsv22/accent-robust-asr"
-cd "$PROJECT_ROOT"
+source scripts/slurm_env.sh
+cd "${PROJECT_ROOT}"
 
 mkdir -p logs
 
@@ -30,7 +30,7 @@ for CONFIG in "${CONFIGS[@]}"; do
   echo "Submitting $CONFIG..."
   JOB_ID=$(sbatch \
     --job-name="exp1_${CONFIG%.json}" \
-    src/experiments/scripts/train_exp1_text_correction.sh \
+    src/experiments/scripts/slurm/train_exp1_text_correction.sh \
     "$CONFIG_PATH" \
     | grep -oP 'Submitted batch job \K\d+')
   JOB_IDS+=($JOB_ID)

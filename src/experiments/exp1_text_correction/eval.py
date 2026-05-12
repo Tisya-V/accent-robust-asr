@@ -17,13 +17,37 @@ from src.experiments.exp1_text_correction.config import Exp1Config, DEFAULT_TOKE
 from src.experiments.exp1_text_correction.model import create_mini_mdm
 from src.experiments.exp1_text_correction.train import forward_process
 from src.utils.perturb_phonemes import PhonemePerturber
-from src.utils.load_l2arctic import load_test_utterances
 from transformers import AutoTokenizer
+import csv
+
+
+def load_test_utterances_from_pt(data_root: str) -> list:
+    """Build test utterance list from .pt files in test data directory."""
+    data_path = Path(data_root)
+    utterances = []
+
+    if not data_path.exists():
+        print(f"[load_test_utterances_from_pt] ERROR: data_root not found: {data_path}")
+        return utterances
+
+    for speaker_dir in sorted(data_path.iterdir()):
+        if not speaker_dir.is_dir():
+            continue
+        speaker = speaker_dir.name
+
+        for pt_file in sorted(speaker_dir.glob("*.pt")):
+            utterances.append({
+                "speaker": speaker,
+                "utterance_id": pt_file.stem,
+            })
+
+    print(f"[load_test_utterances_from_pt] Found {len(utterances)} test utterances")
+    return utterances
 
 
 def load_checkpoint(checkpoint_path: str, device: str):
     """Load a Stage 1 checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config_dict = checkpoint["config"]
     config = Exp1Config(**config_dict)
 
@@ -47,10 +71,12 @@ def evaluate_test_set(
     data_root: str = "data/processed",
     device: str = "cpu",
     perturber=None,
+    output_csv: str = None,
 ) -> dict:
     """
     Evaluate MiniMDM on test set.
     Returns token accuracy metrics on perturbed vs clean tokens.
+    Optionally streams detailed samples to CSV file.
     """
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name, trust_remote_code=True)
     mask_token_id = tokenizer.mask_token_id or tokenizer.vocab_size
@@ -58,24 +84,39 @@ def evaluate_test_set(
     all_results = []
     missing_count = 0
 
+    # Open CSV file if specified (stream instead of holding in memory)
+    csv_file = None
+    csv_writer = None
+    if output_csv:
+        csv_file = open(output_csv, 'w', newline='')
+        csv_writer = csv.DictWriter(csv_file, fieldnames=[
+            "utterance_id", "speaker", "noisy_input", "predictions", "target",
+            "acc_all", "acc_perturbed", "acc_clean"
+        ])
+        csv_writer.writeheader()
+
     for utt in tqdm(test_utterances, desc="Evaluating test set"):
         speaker = utt["speaker"]
-        split = utt["split"]
         utt_id = utt["utterance_id"]
 
-        # Load encoder states: data_root/split/speaker/utt_id.pt
-        pt_path = Path(data_root) / split / speaker / f"{utt_id}.pt"
+        # Load encoder states from test data directory
+        pt_path = Path(data_root) / speaker / f"{utt_id}.pt"
         if not pt_path.exists():
             missing_count += 1
             continue
 
-        data = torch.load(pt_path, map_location=device)
-        condition = data["hidden_states"].float()  # (1500, 768)
+        data = torch.load(pt_path, map_location=device, weights_only=False)
+        condition = data["hidden_states"].float().to(device)  # (1500, 768)
+
+        # Get reference text from .pt file
+        ref_text = data.get("transcript") or data.get("text") or utt.get("text")
+        if not ref_text:
+            missing_count += 1
+            continue
 
         # Tokenize reference
-        text = utt["text"]
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        tokens = torch.tensor(tokens, dtype=torch.long)
+        tokens = tokenizer.encode(ref_text, add_special_tokens=False)
+        tokens = torch.tensor(tokens, dtype=torch.long, device=device)
 
         # Truncate/pad to max_length
         if len(tokens) > config.max_length:
@@ -90,7 +131,7 @@ def evaluate_test_set(
 
         # Create masked input: sample mask ratio from training range
         mask_ratio = random.uniform(config.mask_ratio_low, config.mask_ratio_high)
-        mask_indices = torch.rand(config.max_length) < mask_ratio
+        mask_indices = torch.rand(config.max_length, device=device) < mask_ratio
         masked_ids = tokens.clone()
         masked_ids[mask_indices] = mask_token_id
 
@@ -149,8 +190,24 @@ def evaluate_test_set(
             "num_perturbed": perturb_at_visible.sum().item(),
         })
 
+        # Stream detailed token info to CSV (don't hold in memory)
+        if csv_writer:
+            csv_writer.writerow({
+                "utterance_id": utt_id,
+                "speaker": speaker,
+                "noisy_input": tokenizer.decode([t for t in noisy_ids[0].cpu().tolist() if t != mask_token_id], skip_special_tokens=True),
+                "predictions": tokenizer.decode(preds_visible.cpu().tolist(), skip_special_tokens=True),
+                "target": tokenizer.decode(target_visible.cpu().tolist(), skip_special_tokens=True),
+                "acc_all": f"{acc_all:.4f}",
+                "acc_perturbed": f"{acc_perturbed:.4f}",
+                "acc_clean": f"{acc_clean:.4f}",
+            })
+
     if missing_count > 0:
         print(f"[eval] WARNING: {missing_count} test utterances missing from {data_root}")
+
+    if csv_file:
+        csv_file.close()
 
     return {
         "results": all_results,
@@ -162,8 +219,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to best checkpoint")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--data_root", type=str, default="data/processed")
+    parser.add_argument("--data_root", type=str, default="data/processed/test")
+    parser.add_argument("--output_csv", type=str, default="results/experiment1_stage1/eval_samples.csv",
+                        help="Output CSV with detailed samples")
     args = parser.parse_args()
+
+    output_dir = Path(args.output_csv).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     device = args.device
     print(f"[eval] Using device: {device}")
@@ -181,9 +243,9 @@ def main():
         perturber.to(device)
         print(f"[eval] Loaded PhonemePerturber (k={config.perturber_k})")
 
-    # Load test utterances
-    print("[eval] Loading test utterances...")
-    test_utts = load_test_utterances()
+    # Load test utterances from processed data directory
+    print("[eval] Loading test utterances from processed data...")
+    test_utts = load_test_utterances_from_pt(args.data_root)
     print(f"[eval] Test utterances: {len(test_utts)}")
 
     # Evaluate on test set
@@ -195,6 +257,7 @@ def main():
         data_root=args.data_root,
         device=device,
         perturber=perturber,
+        output_csv=args.output_csv,
     )
     results = eval_result["results"]
 
@@ -202,6 +265,7 @@ def main():
     print("\n" + "="*80)
     print("TEST SET EVALUATION RESULTS")
     print("="*80)
+    print(f"\nDetailed samples saved to: {args.output_csv}")
 
     if not results:
         print("[eval] No test results (all missing)")

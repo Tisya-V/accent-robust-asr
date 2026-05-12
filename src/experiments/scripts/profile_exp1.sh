@@ -17,17 +17,10 @@
 # Output will be printed to the job log (logs/exp1_profile_*.out)
 # Look for "PROFILING SUMMARY" section
 
-export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
-export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
-export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
-export MPLCONFIGDIR=/vol/bitbucket/$USER/.cache/matplotlib
+# Source centralized environment configuration
+source scripts/slurm_env.sh
 
-export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
-source activate
-
-source /vol/cuda/12.4.0/setup.sh
-
-cd /vol/bitbucket/$USER/accent-robust-asr/
+cd "${PROJECT_ROOT}"
 
 set -e
 

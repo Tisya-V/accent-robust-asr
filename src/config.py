@@ -16,7 +16,7 @@ WHISPER_HIDDEN_DIM = 768          # whisper-small
 WHISPER_N_ENCODER_LAYERS = 12     # whisper-small 
 
 # Dataset
-LOCAL_L2ARCTIC_DIR = Path("data/l2_arctic")
+LOCAL_L2ARCTIC_DIR = Path(os.environ.get("L2ARCTIC_DIR", "data/l2_arctic"))
 CMU_ARCTIC_DIR = Path(os.environ.get("CMU_ARCTIC_DIR", "data/cmu_arctic"))
 
 MODELS_DIR = Path("models")
