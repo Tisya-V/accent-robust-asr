@@ -4,7 +4,7 @@
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "# Phase 0: Encoder-Space Deviation vs. WER Correlation\n",
+    "# Motivational Experiment for E2: Encoder-Space Deviation vs. WER Correlation\n",
     "\n",
     "Test whether encoder-space distance between canonical (CMU native English) and L2 speech predicts transcription error (WER).\n",
     "\n",
