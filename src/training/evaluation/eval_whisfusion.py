@@ -273,32 +273,45 @@ class WhisfusionWrapper:
 # ---------------------------------------------------------------------------
 # Load encoded features (for eval)
 # ---------------------------------------------------------------------------
-def build_pt_dataset(utterances, processed_root="data/processed/test"):
+def build_pt_dataset(utterances=None, processed_root="data/processed/test"):
+    from src.config import SPEAKER_L1
+
     pt_root = Path(processed_root)
-
-    id_to_pt = {
-        p.stem: p
-        for p in pt_root.rglob("*.pt")
-    }
-
     dataset = []
-    missing = []
 
-    for utt in utterances:
-        speaker = utt["speaker"]
-        utt_id = f"{speaker}_{utt['utterance_id']}"
+    # Load directly from .pt files
+    for pt_path in sorted(pt_root.rglob("*.pt")):
+        try:
+            data = torch.load(pt_path, weights_only=False, map_location="cpu")
 
-        if utt_id in id_to_pt:
+            # Extract speaker and utterance_id from filename (e.g., "BDL_arctic_a0001")
+            stem = pt_path.stem
+            parts = stem.split("_", 1)
+            if len(parts) != 2:
+                print(f"⚠️ Skipping {pt_path.name}: unexpected filename format")
+                continue
+
+            speaker, utterance_id = parts
+
+            # Get L1 from config
+            l1 = SPEAKER_L1.get(speaker, "Unknown")
+
+            # Extract transcript from .pt file
+            transcript = data.get("transcript", "") if isinstance(data, dict) else ""
+
             dataset.append({
-                **utt,
-                "pt_path": id_to_pt[utt_id]
+                "speaker": speaker,
+                "utterance_id": utterance_id,
+                "l1": l1,
+                "text": transcript,
+                "wav_path": str(pt_path),  # Use pt_path as placeholder
+                "domain": "scripted",
+                "pt_path": pt_path,
             })
-        else:
-            missing.append(utt_id)
+        except Exception as e:
+            print(f"⚠️ Error loading {pt_path.name}: {e}")
 
-    if missing:
-        print(f"⚠️ Missing {len(missing)} .pt files")
-
+    print(f"Loaded {len(dataset)} utterances from .pt files")
     return dataset
 
 # ---------------------------------------------------------------------------
@@ -379,6 +392,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", default=LOCAL_L2ARCTIC_DIR)
+    parser.add_argument("--processed_root", default="data/processed/test", help="Root directory of processed .pt test files")
     parser.add_argument("--output_dir", default="results/model_perf_comparison")
     parser.add_argument("--base_model_path", default="models/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors")
     parser.add_argument("--model", default="whisfusion")
@@ -404,11 +418,8 @@ def main():
         return
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # load data
-    utterances = load_test_utterances(local_root=args.data_root)
-    print(f"Loaded {len(utterances)} utterances")
-    dataset = build_pt_dataset(utterances)
-    print(f"Using {len(dataset)} utterances with cached features")
+    # load data directly from .pt files
+    dataset = build_pt_dataset(processed_root=args.processed_root)
 
     # load model
     model = WhisfusionWrapper(

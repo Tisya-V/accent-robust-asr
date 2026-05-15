@@ -18,7 +18,7 @@
 set -e
 
 # Source centralized environment configuration
-source scripts/env.sh
+source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
 
@@ -56,8 +56,8 @@ python -u -m src.training.hptuning_ts2_with_perturbs  \
     --resume_existing \
     --hpsearch_dir "${HPSEARCH_DIR}/stage2_decoder_mask_perturb" \
     --trainer_script src/training/train_stage2_decoder_perturbs.py \
-    --train_data_dir "${PROCESSED_DATA_DIR}/train/" \
-    --val_data_dir "${PROCESSED_DATA_DIR}/dev/" \
+    --train_data_dir "${TRAIN_DATA_DIR}" \
+    --val_data_dir "${DEV_DATA_DIR}" \
     --pretrain_path "${MODELS_DIR}/whisfusion_ft/stage1_adapter/stage1_adapter.pt" \
     --base_model_path "${MODELS_DIR}/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors" \
     --out_model_name whisfusion \

@@ -7,7 +7,7 @@
 #SBATCH --mem=24GB
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/eval_whisfusion_ft_%j.out
-#SBATCH --error=logs/eval_whisfusion_ft_%j.err
+#SBATCH --error=logs/eval_whisfusion_ft_%j.out
 
 # Whisfusion model evaluation
 #
@@ -18,7 +18,7 @@
 set -e
 
 # Source centralized environment configuration
-source scripts/env.sh
+source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
 
@@ -37,6 +37,9 @@ echo ""
 
 nvidia-smi
 
-python -u -m src.training.evaluation.eval_whisfusion --model whisfusion_ft
+python -u -m src.training.evaluation.eval_whisfusion \
+    --model whisfusion_finetuned_low_ratio \
+    --processed_root "${TEST_DATA_DIR}" \
+    --mask_ratio_schedule "0.9, 0.7, 0.5, 0.3" \
 
 echo "✅ Evaluation completed."

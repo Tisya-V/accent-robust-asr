@@ -15,7 +15,7 @@
 set -e
 
 # Source centralized environment configuration
-source ${PBS_O_WORKDIR}/scripts/env.sh
+source ${PBS_O_WORKDIR}/scripts/pbs_env.sh
 
 cd "${PROJECT_ROOT}"
 

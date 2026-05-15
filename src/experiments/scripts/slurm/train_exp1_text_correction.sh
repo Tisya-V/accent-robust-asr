@@ -5,7 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:30:00
+#SBATCH --mem=100G
+#SBATCH --time=03:00:00
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.out
 
@@ -17,19 +18,12 @@
 # OR
 # 3. ./src/experiments/scripts/train_exp1_text_correction.sh (for interactive submission)
 
-export HF_HOME=/vol/bitbucket/$USER/.cache/huggingface
-export TRANSFORMERS_CACHE=/vol/bitbucket/$USER/.cache/huggingface/transformers
-export XDG_CACHE_HOME=/vol/bitbucket/$USER/.cache
-export MPLCONFIGDIR=/vol/bitbucket/$USER/.cache/matplotlib
+# Source centralized environment configuration
+source scripts/slurm_env.sh
+
+cd "${PROJECT_ROOT}"
 
 export NCCL_P2P_DISABLE=1
-
-export PATH=/vol/bitbucket/$USER/accent-robust-asr/.venv/bin/:$PATH
-source activate
-
-source /vol/cuda/12.4.0/setup.sh
-
-cd /vol/bitbucket/$USER/accent-robust-asr/
 
 set -e
 
@@ -52,6 +46,18 @@ for i in range(torch.cuda.device_count()):
 PY
 
 echo ""
+echo "Staging data to local node storage ($TMPDIR)..."
+mkdir -p "$TMPDIR/train" "$TMPDIR/dev"
+
+echo "Copying train data..."
+rsync -a --inplace --info=progress2 "${TRAIN_DATA_DIR}"/ "$TMPDIR/train/"
+
+echo "Copying dev data..."
+rsync -a --inplace --info=progress2 "${DEV_DATA_DIR}"/ "$TMPDIR/dev/"
+
+echo "✓ Data staging complete"
+
+echo ""
 echo "Starting Experiment 1 training..."
 echo ""
 
@@ -60,7 +66,9 @@ CONFIG="${1:-src/experiments/exp1_text_correction/configs/low_perturb_medium_mas
 
 python -u -m src.experiments.exp1_text_correction.train \
     --config "$CONFIG" \
-    --device cuda
+    --device cuda \
+    --train_data_dir "$TMPDIR/train" \
+    --val_data_dir "$TMPDIR/dev"
 
 echo ""
 echo "✅ Experiment 1 training finished."

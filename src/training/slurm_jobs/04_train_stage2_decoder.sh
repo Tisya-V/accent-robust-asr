@@ -1,15 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=whisfusion_stage2_decoder
+#SBATCH --job-name=train_stage2_lowratio
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --gpus=2
-#SBATCH --mem=24GB
-#SBATCH --time=04:30:00
+#SBATCH --gres=gpu:3
+#SBATCH --partition=a30
+#SBATCH --mem=72GB
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/whisfusion_stage2_decoder_%j.out
-#SBATCH --error=logs/whisfusion_stage2_decoder_%j.err
+#SBATCH --error=logs/whisfusion_stage2_decoder_%j.out
 
-# Starts Stage 2 training - fine-tunes full decoder and adapter with high masking ratios
+# Starts Stage 2 training - fine-tunes full decoder and adapter with given masking ratios
 # to specialize in initial token generation
 #
 # Usage on HPC cluster with SLURM:
@@ -19,7 +20,7 @@
 set -e
 
 # Source centralized environment configuration
-source scripts/env.sh
+source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
 
@@ -51,21 +52,21 @@ for i in range(torch.cuda.device_count()):
 PY
 
 echo -e "\n\n==============================\n\n"
-echo "Starting Stage 2: Decoder Specialization (High Mask Ratio, With Perturbations)..."
+echo "Starting Stage 2: Decoder Specialization (Low Mask Ratio, No Perturbations)..."
 
 fabric run src/training/train_stage2_decoder_perturbs.py \
    --strategy=ddp \
-   --devices=2 \
-   --train_data_dir "${PROCESSED_DATA_DIR}/train/" \
-   --val_data_dir   "${PROCESSED_DATA_DIR}/dev/" \
+   --devices=3 \
+   --train_data_dir "${TRAIN_DATA_DIR}" \
+   --val_data_dir   "${DEV_DATA_DIR}" \
    --pretrain_path  "${MODELS_DIR}/whisfusion_finetuned/stage1_adapter/stage1_adapter.pt" \
    --base_model_path "${MODELS_DIR}/smdm/mdm_safetensors/mdm-170M-100e18-rsl-0.01.safetensors" \
-   --out_dir        "${MODELS_DIR}/whisfusion_finetuned/stage2_decoder" \
+   --out_dir        "${MODELS_DIR}/whisfusion_finetuned_low_ratio/stage2_decoder" \
    --model_name     Diff_LLaMA_170M \
    --tokenizer_name TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T \
-   --num_devices 2              \
-   --batch_size 96             \
-   --gradient_accumulation_steps 3 \
+   --num_devices 3              \
+   --batch_size  48            \
+   --gradient_accumulation_steps 2 \
    --learning_rate 1e-5         \
    --second_stage_lr_multiplier 0.5 \
    --lr_scaling linear          \
@@ -74,12 +75,11 @@ fabric run src/training/train_stage2_decoder_perturbs.py \
    --weight_decay 0.005         \
    --scheduler_type cosine      \
    --warmup_ratio 0.1           \
-   --epochs 40                  \
+   --epochs 80                  \
    --patience 5                 \
-   --use_ema \
    --ema_decay 0.995  \
    --compute_wer_cer   \
-   --min_mask_ratio 0.7 \
+   --min_mask_ratio 0.0 \
    --max_mask_ratio 1.0
    # --use_phoneme_perturber \
    # --perturb_prob 0.3 \

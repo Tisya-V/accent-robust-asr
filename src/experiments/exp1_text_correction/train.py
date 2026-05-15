@@ -93,19 +93,16 @@ def train_epoch(
 
         postfix = {"loss": f"{loss.item():.4f}"}
 
-        # Compute accuracy metrics every N batches
         if (batch_idx + 1) % metric_interval == 0:
             with torch.no_grad():
                 preds_visible = logits_visible.argmax(dim=-1)
                 acc = (preds_visible == target_visible).float().mean().item()
                 acc_list.append(acc)
-                postfix["acc"] = f"{acc:.4f}"
 
                 perturb_at_visible = perturb_mask[visible_mask]
                 if perturb_at_visible.any():
                     acc_pert = (preds_visible[perturb_at_visible] == target_visible[perturb_at_visible]).float().mean().item()
                     acc_perturbed_list.append(acc_pert)
-                    postfix["acc_pert"] = f"{acc_pert:.4f}"
 
         pbar.set_postfix(postfix)
 
@@ -167,6 +164,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to JSON config file")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--train_data_dir", type=str, default=None, help="Override config train data directory")
+    parser.add_argument("--val_data_dir", type=str, default=None, help="Override config val data directory")
     args = parser.parse_args()
 
     config = Exp1Config.from_json(args.config)
@@ -181,6 +180,8 @@ def main():
         tokenizer_name=config.tokenizer_name,
         max_length=config.max_length,
         data_root=config.data_root,
+        train_root=args.train_data_dir,
+        val_root=args.val_data_dir,
         mask_ratio_range=(config.mask_ratio_low, config.mask_ratio_high),
         num_workers=config.num_workers,
     )
