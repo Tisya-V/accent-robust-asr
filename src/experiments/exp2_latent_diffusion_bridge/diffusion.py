@@ -81,17 +81,16 @@ def bridge_loss(
     z_t, eps = sample_forward(z_nat, z_acc, t, sigma_max=sigma_max)
 
     # Predict noise
-    with torch.autocast("cuda", dtype=torch.bfloat16):
-        eps_pred = model(z_t, t)
+    eps_pred = model(z_t, t)
 
     # MSE on noise prediction
-    loss = torch.mean((eps_pred - eps) ** 2)
-
     # Optional: mask padding frames (frames after speech_end)
     if speech_end is not None:
         mask = torch.arange(L, device=device).unsqueeze(0) < speech_end.unsqueeze(1)  # [B, L]
-        mask = mask.float().unsqueeze(-1)  # [B, L, 1]
-        loss = torch.sum((eps_pred - eps) ** 2 * mask) / (torch.sum(mask) + 1e-8)
+        mask = mask.unsqueeze(-1).expand_as(eps_pred)  # [B, L, 1]
+        loss = (eps_pred - eps).pow(2)[mask].mean()
+    else:
+        loss = torch.mean((eps_pred - eps) ** 2)
 
     return loss
 
@@ -156,7 +155,7 @@ def bridge_inference(
             # Implicit z_nat estimation:
             # From z_t = (1-t)·z_nat + t·z_acc + σ(t)·ε_pred
             # Solve for z_nat: z_nat = (z_t - t·z_acc - σ(t)·ε_pred) / (1-t)
-            z_nat_hat = (z_t - t_cur * z_acc - sigma_t_cur.view(-1, 1, 1) * eps_pred) / (1 - t_cur + 1e-8)
+            z_nat_hat = (z_t - t_cur * z_acc - sigma_t_cur * eps_pred) / (1 - t_cur + 1e-8)
 
             # Step toward next timestep using implicit z_nat
             z_t = (1 - t_next) * z_nat_hat + t_next * z_acc + sigma_t_next.view(-1, 1, 1) * eps_pred

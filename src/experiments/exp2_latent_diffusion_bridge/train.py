@@ -11,6 +11,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -111,16 +112,21 @@ def train_epoch(
             break
         time_load += time.time() - t_load_start
 
-        z_acc = z_acc.to(device)
-        z_nat = z_nat.to(device)
-        speech_end = speech_end.to(device)
+        z_acc = z_acc.to(device, non_blocking=True)
+        z_nat = z_nat.to(device, non_blocking=True)
+        speech_end = speech_end.to(device, non_blocking=True)
+
+        # Diagnostic: print latent scales on first batch of epoch
+        if num_batches == 0:
+            print(f"[Latent scales] z_nat: mean={z_nat.mean():.3f}, std={z_nat.std():.3f}")
+            print(f"[Latent scales] z_acc: mean={z_acc.mean():.3f}, std={z_acc.std():.3f}")
+            print(f"[Latent scales] diff MSE (baseline): {F.mse_loss(z_acc, z_nat):.4f}")
 
         optimizer.zero_grad()
 
-        # Forward pass with bf16 AMP
+        # Forward pass
         t_fwd_start = time.time()
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+        loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
         time_fwd += time.time() - t_fwd_start
 
         # Backward
@@ -172,14 +178,21 @@ def val_epoch(
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
+        first_batch = True
         for z_acc, z_nat, speech_end in pbar:
-            z_acc = z_acc.to(device)
-            z_nat = z_nat.to(device)
-            speech_end = speech_end.to(device)
+            z_acc = z_acc.to(device, non_blocking=True)
+            z_nat = z_nat.to(device, non_blocking=True)
+            speech_end = speech_end.to(device, non_blocking=True)
 
-            # Forward pass with bf16 AMP
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+            # Diagnostic: print latent scales on first batch of validation
+            if first_batch:
+                print(f"[Val latent scales] z_nat: mean={z_nat.mean():.3f}, std={z_nat.std():.3f}")
+                print(f"[Val latent scales] z_acc: mean={z_acc.mean():.3f}, std={z_acc.std():.3f}")
+                print(f"[Val latent scales] diff MSE (baseline): {F.mse_loss(z_acc, z_nat):.4f}")
+                first_batch = False
+
+            # Forward pass
+            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
 
             total_loss += loss.item()
             num_batches += 1
