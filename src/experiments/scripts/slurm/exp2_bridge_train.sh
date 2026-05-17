@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=exp2_bridge_train
-#SBATCH --partition=gpu
+#SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=24G
+#SBATCH --mem=24GB
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/exp2_bridge_train_%j.out
 #SBATCH --error=logs/exp2_bridge_train_%j.err
