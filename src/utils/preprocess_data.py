@@ -54,7 +54,13 @@ def write_raw_split(raw_split_dir: Path, utterances: list[dict]):
 
     for utt in tqdm(utterances, desc=f"Copying WAVs -> {raw_split_dir.name}"):
         speaker = utt["speaker"]
-        utt_id = f"{speaker}_{utt['utterance_id']}"
+        # L2-ARCTIC: utterance_id includes speaker prefix (e.g., "ABA_arctic_a0001")
+        # CMU-ARCTIC: utterance_id is just prompt ID (e.g., "arctic_a0001")
+        # Add speaker prefix only if not already present
+        if utt['utterance_id'].startswith(f"{speaker}_"):
+            utt_id = utt['utterance_id']
+        else:
+            utt_id = f"{speaker}_{utt['utterance_id']}"
 
         speaker_dir = raw_split_dir / speaker
         speaker_dir.mkdir(parents=True, exist_ok=True)
