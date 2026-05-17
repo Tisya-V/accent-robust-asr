@@ -59,9 +59,21 @@ class BridgeDataset(Dataset):
         """
         pair = self.pairs[idx]
 
-        # Construct full paths
-        l2_path = self.data_dir / pair["l2_encoder_state_path"]
-        nat_path = self.data_dir / pair["nat_encoder_state_path"]
+        # Try to find encoder states in either train or dev directory
+        def find_file(rel_path):
+            for split_name in ["train", "dev"]:
+                full_path = get_split_data_dir(split_name) / rel_path
+                if full_path.exists():
+                    return full_path
+            return None
+
+        l2_path = find_file(pair["l2_encoder_state_path"])
+        nat_path = find_file(pair["nat_encoder_state_path"])
+
+        if l2_path is None:
+            raise FileNotFoundError(f"Missing L2 encoder state: {pair['l2_encoder_state_path']}")
+        if nat_path is None:
+            raise FileNotFoundError(f"Missing native encoder state: {pair['nat_encoder_state_path']}")
 
         # Load encoder states
         try:

@@ -58,6 +58,6 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --lr 1e-4 \
     --weight_decay 1e-4 \
     --sigma_max 0.5 \
-    --num_workers 4
+    --num_workers 2
 
 echo "✅ Bridge training complete."
