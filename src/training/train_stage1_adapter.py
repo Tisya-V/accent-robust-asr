@@ -254,7 +254,7 @@ def main(fabric: L.Fabric, args, out_dir: Path):
                if fabric.global_rank == 0:
                    fabric.print(f"Loading adapter weights from '{args.pretrain_path}'")
                
-               adapter_state = torch.load(args.pretrain_path, map_location="cpu")
+               adapter_state = torch.load(args.pretrain_path, map_location="cpu", weights_only=False)
                model_state = model.state_dict()
                
                for key, value in adapter_state.items():

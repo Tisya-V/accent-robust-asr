@@ -80,7 +80,7 @@ def load_bridge_model(
     """Load trained BridgeTransformer from checkpoint."""
     from .model import BridgeTransformer
 
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     model = BridgeTransformer(d_model=768, n_layers=4, n_heads=8, dim_feedforward=2048)
     model.load_state_dict(ckpt["model_state_dict"])
     model = model.to(device)
@@ -90,7 +90,7 @@ def load_bridge_model(
 
 def load_encoder_state(state_path: str | Path) -> torch.Tensor:
     """Load encoder state from .pt file and upcast to float32."""
-    state = torch.load(state_path, map_location="cpu")
+    state = torch.load(state_path, map_location="cpu", weights_only=False)
     z = state["hidden_states"]  # [1500, 768] in bfloat16 or float32
     if z.dtype == torch.bfloat16:
         z = z.float()

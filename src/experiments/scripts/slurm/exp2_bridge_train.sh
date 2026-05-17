@@ -50,10 +50,10 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --mapping_val_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json \
     --out_dir models/bridge \
     --n_epochs 50 \
-    --batch_size 32 \
+    --batch_size 24 \
     --lr 1e-4 \
-    --weight_decay 1e-4 \
+    --weight_decay 1e-3 \
     --sigma_max 0.5 \
-    --num_workers 4
+    --num_workers 0
 
 echo "✅ Bridge training complete."

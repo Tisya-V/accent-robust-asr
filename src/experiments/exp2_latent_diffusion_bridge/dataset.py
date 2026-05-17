@@ -77,8 +77,8 @@ class BridgeDataset(Dataset):
 
         # Load encoder states
         try:
-            l2_state = torch.load(l2_path, map_location="cpu")
-            nat_state = torch.load(nat_path, map_location="cpu")
+            l2_state = torch.load(l2_path, map_location="cpu", weights_only=False)
+            nat_state = torch.load(nat_path, map_location="cpu", weights_only=False)
         except FileNotFoundError as e:
             raise FileNotFoundError(f"Missing encoder state: {e}")
 

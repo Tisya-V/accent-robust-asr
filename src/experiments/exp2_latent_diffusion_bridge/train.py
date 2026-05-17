@@ -61,7 +61,7 @@ def load_checkpoint(
     device: torch.device,
 ) -> Tuple[int, float]:
     """Load checkpoint and return starting epoch + best val loss."""
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     state_dict = ckpt["model_state_dict"]
 
     # Handle torch.compile wrapper: strip _orig_mod. prefix if present
