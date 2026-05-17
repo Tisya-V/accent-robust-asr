@@ -106,7 +106,7 @@ def train_epoch(
 
         total_loss += loss.item()
         num_batches += 1
-        pbar.set_postfix({"loss": loss.item():.6f})
+        pbar.set_postfix({"loss": f"{loss.item():.6f}"})
 
     avg_loss = total_loss / num_batches
     return avg_loss
@@ -136,7 +136,7 @@ def val_epoch(
 
             total_loss += loss.item()
             num_batches += 1
-            pbar.set_postfix({"loss": loss.item():.6f})
+            pbar.set_postfix({"loss": f"{loss.item():.6f}"})
 
     avg_loss = total_loss / num_batches
     return avg_loss

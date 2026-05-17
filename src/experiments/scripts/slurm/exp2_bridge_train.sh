@@ -6,7 +6,7 @@
 #SBATCH --mem=24GB
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/exp2_bridge_train_%j.out
-#SBATCH --error=logs/exp2_bridge_train_%j.err
+#SBATCH --error=logs/exp2_bridge_train_%j.out
 
 # Train E2 Latent Diffusion Bridge model on SLURM
 #
@@ -20,12 +20,6 @@ set -e
 source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
-
-# Create real-time log file
-RUNTIME_LOG="logs/exp2_bridge_train_runtime_${SLURM_JOB_ID}.log"
-mkdir -p logs
-exec > >(tee -a "$RUNTIME_LOG")
-exec 2>&1
 
 echo "=========================================="
 echo "E2 Latent Diffusion Bridge Training Job"
