@@ -83,14 +83,34 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     sigma_max: float = 0.5,
+    profile: bool = False,
 ) -> float:
     """Train for one epoch. Returns average loss."""
+    import time
+
     model.train()
     total_loss = 0.0
     num_batches = 0
 
-    pbar = tqdm(train_loader, desc="Training")
-    for z_acc, z_nat, speech_end in pbar:
+    # Timing buckets
+    time_load = 0.0
+    time_fwd = 0.0
+    time_bwd = 0.0
+    time_opt = 0.0
+
+    t_batch_start = time.time()
+    iterator = iter(train_loader)
+    pbar = tqdm(total=len(train_loader), desc="Training")
+
+    while num_batches < len(train_loader):
+        # Time data loading (includes disk I/O + tensor creation)
+        t_load_start = time.time()
+        try:
+            z_acc, z_nat, speech_end = next(iterator)
+        except StopIteration:
+            break
+        time_load += time.time() - t_load_start
+
         z_acc = z_acc.to(device)
         z_nat = z_nat.to(device)
         speech_end = speech_end.to(device)
@@ -98,21 +118,42 @@ def train_epoch(
         optimizer.zero_grad()
 
         # Forward pass with bf16 AMP
+        t_fwd_start = time.time()
         with torch.autocast("cuda", dtype=torch.bfloat16):
             loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+        time_fwd += time.time() - t_fwd_start
 
         # Backward
+        t_bwd_start = time.time()
         loss.backward()
 
         # Gradient clipping
         clip_grad_norm_(model.parameters(), max_norm=1.0)
+        time_bwd += time.time() - t_bwd_start
 
         # Optimizer step
+        t_opt_start = time.time()
         optimizer.step()
+        time_opt += time.time() - t_opt_start
 
         total_loss += loss.item()
         num_batches += 1
+        pbar.update(1)
         pbar.set_postfix({"loss": f"{loss.item():.6f}"})
+
+        if profile and num_batches >= 20:
+            break
+
+    pbar.close()
+
+    if profile:
+        total_time = time.time() - t_batch_start
+        print(f"\n[Profile - first {num_batches} batches]")
+        print(f"  Total:      {total_time:.2f}s ({num_batches/total_time:.2f} it/s)")
+        print(f"  Load:       {time_load:.2f}s ({100*time_load/total_time:.1f}%) [disk I/O + tensor creation]")
+        print(f"  Forward:    {time_fwd:.2f}s ({100*time_fwd/total_time:.1f}%)")
+        print(f"  Backward:   {time_bwd:.2f}s ({100*time_bwd/total_time:.1f}%)")
+        print(f"  Optimizer:  {time_opt:.2f}s ({100*time_opt/total_time:.1f}%)")
 
     avg_loss = total_loss / num_batches
     return avg_loss
@@ -158,6 +199,7 @@ def train(
     weight_decay: float = 1e-4,
     sigma_max: float = 0.5,
     num_workers: int = 4,
+    profile: bool = False,
 ):
     """
     Train the bridge model.
@@ -235,7 +277,7 @@ def train(
         print(f"\n[Epoch {epoch+1}/{n_epochs}]")
 
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, device, sigma_max=sigma_max)
+        train_loss = train_epoch(model, train_loader, optimizer, device, sigma_max=sigma_max, profile=profile)
         print(f"  Train loss: {train_loss:.6f}")
 
         # Validate
@@ -285,6 +327,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
     parser.add_argument("--sigma_max", type=float, default=0.5, help="Noise schedule parameter")
     parser.add_argument("--num_workers", type=int, default=4, help="DataLoader workers")
+    parser.add_argument("--profile", action="store_true", help="Profile first 20 batches and exit")
 
     args = parser.parse_args()
     train(**vars(args))
