@@ -2,7 +2,7 @@
 #SBATCH --job-name=exp2_bridge_train
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=24GB
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/exp2_bridge_train_%j.out
@@ -54,6 +54,6 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --lr 1e-4 \
     --weight_decay 1e-4 \
     --sigma_max 0.5 \
-    --num_workers 2
+    --num_workers 4
 
 echo "✅ Bridge training complete."

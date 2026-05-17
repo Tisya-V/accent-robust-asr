@@ -205,9 +205,9 @@ def train(
     model = BridgeTransformer(d_model=768, n_layers=4, n_heads=8, dim_feedforward=2048)
     model = model.to(device)
 
-    # Compile for speedup
-    print(f"[Train] Compiling model...")
-    model = torch.compile(model)
+    # Compile for speedup (disabled due to multiprocessing conflicts with torch.compile + DataLoader)
+    # print(f"[Train] Compiling model...")
+    # model = torch.compile(model)
 
     # Optimizer and scheduler
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
