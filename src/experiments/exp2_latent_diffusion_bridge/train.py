@@ -178,7 +178,7 @@ def train(
     train_dataset = BridgeDataset(mapping_train_path, split="train")
 
     print(f"[Train] Loading validation data from {mapping_val_path}")
-    val_dataset = BridgeDataset(mapping_val_path, split="val")
+    val_dataset = BridgeDataset(mapping_val_path, split="dev")
 
     print(f"[Train] Train set: {len(train_dataset)}, Val set: {len(val_dataset)}")
 
