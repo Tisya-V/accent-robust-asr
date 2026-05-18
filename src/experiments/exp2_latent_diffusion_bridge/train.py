@@ -88,12 +88,14 @@ def save_config(config_path: Path, **kwargs):
     print(f"[Config] Saved: {config_path}")
 
 
-def save_history(history_path: Path, train_losses: list, val_losses: list):
+def save_history(history_path: Path, train_losses: list, val_losses: list, cosine_sims: dict = None):
     """Save training history to JSON."""
     history = {
         "train_losses": train_losses,
         "val_losses": val_losses,
     }
+    if cosine_sims:
+        history["cosine_similarities"] = cosine_sims
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
@@ -405,9 +407,18 @@ def train(
     }
     save_config(out_dir / "config.json", **config)
 
+    # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
+    z_acc_sample = None
+    z_nat_sample = None
+    for z_acc, z_nat, _ in train_loader:
+        z_acc_sample = z_acc[:4].to(device, non_blocking=True)  # Use first 4 samples
+        z_nat_sample = z_nat[:4].to(device, non_blocking=True)
+        break
+
     # Training loop with loss history
     train_losses = []
     val_losses = []
+    cosine_sims = {}  # Track cosine similarities: {epoch: value}
     print(f"[Train] Starting training for {n_epochs} epochs")
     for epoch in range(start_epoch, n_epochs):
         print(f"\n[Epoch {epoch+1}/{n_epochs}]")
@@ -426,6 +437,15 @@ def train(
         print(f"  Val loss:   {val_loss:.6f}")
         val_losses.append(val_loss)
 
+        # Sanity check: every 5 epochs, measure cosine similarity of denoised latents
+        if (epoch + 1) % 5 == 0 and z_acc_sample is not None:
+            from .diffusion import bridge_inference
+            with torch.no_grad():
+                z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max)
+                sim = F.cosine_similarity(z_hat, z_nat_sample, dim=-1).mean().item()
+                cosine_sims[str(epoch + 1)] = sim
+                print(f"  Cosine sim: {sim:.4f} (z_acc vs z_hat vs z_nat)")
+
         # Scheduler step
         scheduler.step()
 
@@ -440,7 +460,7 @@ def train(
             print(f"  ✓ New best val loss: {best_val_loss:.6f}")
 
     # Save training history and plot
-    save_history(out_dir / "history.json", train_losses, val_losses)
+    save_history(out_dir / "history.json", train_losses, val_losses, cosine_sims=cosine_sims if cosine_sims else None)
     plot_losses(out_dir / "losses.png", train_losses, val_losses)
 
     print(f"\n[Train] Complete. Best val loss: {best_val_loss:.6f}")
