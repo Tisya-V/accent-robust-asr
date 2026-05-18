@@ -5,6 +5,7 @@ Noise-prediction parameterization for latent space refinement.
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def sample_forward(z_nat: torch.Tensor, z_acc: torch.Tensor, t: torch.Tensor, sigma_max: float = 0.5) -> torch.Tensor:
@@ -38,7 +39,8 @@ def sample_forward(z_nat: torch.Tensor, z_acc: torch.Tensor, t: torch.Tensor, si
     # Compute noise scale σ(t) = σ_max · √(t(1-t))
     # At t=0 and t=1: σ=0 (no noise at boundaries)
     # At t=0.5: σ=σ_max/2 (peak noise)
-    sigma_t = sigma_max * torch.sqrt(t * (1 - t))
+    # Clamp to avoid sqrt(0) NaN in bf16 at boundaries
+    sigma_t = sigma_max * torch.sqrt((t * (1 - t)).clamp(min=1e-5))
 
     # Compute z_t
     z_t = (1 - t) * z_nat + t * z_acc + sigma_t * eps
@@ -82,15 +84,16 @@ def bridge_loss(
 
     # Predict noise
     eps_pred = model(z_t, t)
-
+    
     # MSE on noise prediction
     # Optional: mask padding frames (frames after speech_end)
     if speech_end is not None:
         mask = torch.arange(L, device=device).unsqueeze(0) < speech_end.unsqueeze(1)  # [B, L]
         mask = mask.unsqueeze(-1).expand_as(eps_pred)  # [B, L, 1]
-        loss = (eps_pred - eps).pow(2)[mask].mean()
+        loss = F.mse_loss(eps_pred[mask], eps[mask])
+
     else:
-        loss = torch.mean((eps_pred - eps) ** 2)
+        loss = F.mse_loss(eps_pred, eps)
 
     return loss
 
@@ -148,9 +151,9 @@ def bridge_inference(
             # Predict noise at current step
             eps_pred = model(z_t, t_cur_batch)
 
-            # Compute noise scales
-            sigma_t_cur = sigma_max * torch.sqrt(t_cur * (1 - t_cur))
-            sigma_t_next = sigma_max * torch.sqrt(t_next * (1 - t_next))
+            # Compute noise scales (clamp to avoid sqrt(0) NaN in bf16)
+            sigma_t_cur = sigma_max * torch.sqrt(torch.clamp(t_cur * (1 - t_cur), min=1e-5))
+            sigma_t_next = sigma_max * torch.sqrt(torch.clamp(t_next * (1 - t_next), min=1e-5))
 
             # Implicit z_nat estimation:
             # From z_t = (1-t)·z_nat + t·z_acc + σ(t)·ε_pred

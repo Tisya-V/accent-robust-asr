@@ -82,9 +82,9 @@ class BridgeDataset(Dataset):
         except FileNotFoundError as e:
             raise FileNotFoundError(f"Missing encoder state: {e}")
 
-        # Extract hidden states and upcast bf16 → float32
-        z_acc = l2_state["hidden_states"].float()  # [1500, 768]
-        z_nat = nat_state["hidden_states"].float()  # [1500, 768]
+        # Extract hidden states (keep in bf16 for memory efficiency)
+        z_acc = l2_state["hidden_states"]  # [1500, 768] in bf16
+        z_nat = nat_state["hidden_states"]  # [1500, 768] in bf16
 
         # Sanity checks
         assert z_acc.shape == (1500, 768), f"Unexpected z_acc shape: {z_acc.shape}"

@@ -17,6 +17,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from .model import BridgeTransformer
 from .diffusion import bridge_loss
@@ -78,15 +79,94 @@ def load_checkpoint(
     return epoch, best_val_loss
 
 
+def save_config(config_path: Path, **kwargs):
+    """Save training config to JSON."""
+    config = {k: v for k, v in kwargs.items() if not callable(v) and not isinstance(v, (Path, type))}
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2, default=str)
+    print(f"[Config] Saved: {config_path}")
+
+
+def save_history(history_path: Path, train_losses: list, val_losses: list):
+    """Save training history to JSON."""
+    history = {
+        "train_losses": train_losses,
+        "val_losses": val_losses,
+    }
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_path, "w") as f:
+        json.dump(history, f, indent=2)
+    print(f"[History] Saved: {history_path}")
+
+
+def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
+    """Plot and save training/validation loss curves."""
+    plt.figure(figsize=(10, 6))
+    epochs = range(1, len(train_losses) + 1)
+    plt.plot(epochs, train_losses, "b-", label="Train Loss", linewidth=2)
+    plt.plot(epochs, val_losses, "r-", label="Val Loss", linewidth=2)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Validation Loss")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    print(f"[Plot] Saved: {plot_path}")
+    plt.close()
+
+
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     sigma_max: float = 0.5,
-    profile: bool = False,
 ) -> float:
     """Train for one epoch. Returns average loss."""
+    model.train()
+    total_loss = 0.0
+    num_batches = 0
+
+    pbar = tqdm(train_loader, desc="Training")
+    for z_acc, z_nat, speech_end in pbar:
+        torch.autograd.set_detect_anomaly(True)
+
+        z_acc = z_acc.to(device, non_blocking=True)
+        z_nat = z_nat.to(device, non_blocking=True)
+        speech_end = speech_end.to(device, non_blocking=True)
+
+        optimizer.zero_grad()
+
+        # Forward pass with bf16 autocast
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+
+        # Backward
+        loss.backward()
+        clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+        # Optimizer step
+        optimizer.step()
+
+        total_loss += loss.item()
+        num_batches += 1
+        pbar.set_postfix({"loss": f"{loss.item():.6f}"})
+
+    pbar.close()
+    avg_loss = total_loss / num_batches
+    return avg_loss
+
+
+def train_epoch_profile(
+    model: nn.Module,
+    train_loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    sigma_max: float = 0.5,
+) -> float:
+    """Profile-instrumented training epoch with detailed timing. Returns average loss."""
     import time
 
     model.train()
@@ -98,13 +178,15 @@ def train_epoch(
     time_fwd = 0.0
     time_bwd = 0.0
     time_opt = 0.0
+    time_todevice = 0.0
+    time_zgrad = 0.0
 
     t_batch_start = time.time()
     iterator = iter(train_loader)
-    pbar = tqdm(total=len(train_loader), desc="Training")
+    pbar = tqdm(total=len(train_loader), desc="Training [PROFILE]")
 
     while num_batches < len(train_loader):
-        # Time data loading (includes disk I/O + tensor creation)
+        # Time data loading
         t_load_start = time.time()
         try:
             z_acc, z_nat, speech_end = next(iterator)
@@ -112,34 +194,36 @@ def train_epoch(
             break
         time_load += time.time() - t_load_start
 
+        t_todevice_start = time.time()
         z_acc = z_acc.to(device, non_blocking=True)
         z_nat = z_nat.to(device, non_blocking=True)
         speech_end = speech_end.to(device, non_blocking=True)
+        torch.cuda.synchronize() if device.type == "cuda" else None
+        time_todevice += time.time() - t_todevice_start
 
-        # Diagnostic: print latent scales on first batch of epoch
-        if num_batches == 0:
-            print(f"[Latent scales] z_nat: mean={z_nat.mean():.3f}, std={z_nat.std():.3f}")
-            print(f"[Latent scales] z_acc: mean={z_acc.mean():.3f}, std={z_acc.std():.3f}")
-            print(f"[Latent scales] diff MSE (baseline): {F.mse_loss(z_acc, z_nat):.4f}")
-
+        t_zgrad_start = time.time()
         optimizer.zero_grad()
+        torch.cuda.synchronize() if device.type == "cuda" else None
+        time_zgrad += time.time() - t_zgrad_start
 
-        # Forward pass
+        # Forward pass with bf16 autocast
         t_fwd_start = time.time()
-        loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+        torch.cuda.synchronize() if device.type == "cuda" else None
         time_fwd += time.time() - t_fwd_start
 
         # Backward
         t_bwd_start = time.time()
         loss.backward()
-
-        # Gradient clipping
         clip_grad_norm_(model.parameters(), max_norm=1.0)
+        torch.cuda.synchronize() if device.type == "cuda" else None
         time_bwd += time.time() - t_bwd_start
 
         # Optimizer step
         t_opt_start = time.time()
         optimizer.step()
+        torch.cuda.synchronize() if device.type == "cuda" else None
         time_opt += time.time() - t_opt_start
 
         total_loss += loss.item()
@@ -147,19 +231,28 @@ def train_epoch(
         pbar.update(1)
         pbar.set_postfix({"loss": f"{loss.item():.6f}"})
 
-        if profile and num_batches >= 20:
+        if num_batches >= 20:
             break
 
     pbar.close()
 
-    if profile:
-        total_time = time.time() - t_batch_start
-        print(f"\n[Profile - first {num_batches} batches]")
-        print(f"  Total:      {total_time:.2f}s ({num_batches/total_time:.2f} it/s)")
-        print(f"  Load:       {time_load:.2f}s ({100*time_load/total_time:.1f}%) [disk I/O + tensor creation]")
-        print(f"  Forward:    {time_fwd:.2f}s ({100*time_fwd/total_time:.1f}%)")
-        print(f"  Backward:   {time_bwd:.2f}s ({100*time_bwd/total_time:.1f}%)")
-        print(f"  Optimizer:  {time_opt:.2f}s ({100*time_opt/total_time:.1f}%)")
+    torch.cuda.synchronize() if device.type == "cuda" else None
+    total_time = time.time() - t_batch_start
+    print(f"\n[Profile - first {num_batches} batches]")
+    print(f"  Total:      {total_time:.2f}s ({num_batches/total_time:.2f} it/s)")
+    print(f"  Load:       {time_load:.2f}s ({100*time_load/total_time:.1f}%) [disk I/O + tensor creation]")
+    print(f"  ToDevice:   {time_todevice:.2f}s ({100*time_todevice/total_time:.1f}%) [host→GPU transfer]")
+    print(f"  ZeroGrad:   {time_zgrad:.2f}s ({100*time_zgrad/total_time:.1f}%) [optimizer.zero_grad()]")
+    print(f"  Forward:    {time_fwd:.2f}s ({100*time_fwd/total_time:.1f}%)")
+    print(f"  Backward:   {time_bwd:.2f}s ({100*time_bwd/total_time:.1f}%)")
+    print(f"  Optimizer:  {time_opt:.2f}s ({100*time_opt/total_time:.1f}%)")
+    total_accounted = time_load + time_todevice + time_zgrad + time_fwd + time_bwd + time_opt
+    print(f"  Unaccounted: {total_time - total_accounted:.2f}s ({100*(total_time - total_accounted)/total_time:.1f}%)")
+    # GPU memory stats
+    if device.type == "cuda":
+        print(f"\n[GPU Memory]")
+        print(f"  Allocated: {torch.cuda.memory_allocated(device) / 1e9:.2f} GB")
+        print(f"  Reserved:  {torch.cuda.memory_reserved(device) / 1e9:.2f} GB")
 
     avg_loss = total_loss / num_batches
     return avg_loss
@@ -191,8 +284,9 @@ def val_epoch(
                 print(f"[Val latent scales] diff MSE (baseline): {F.mse_loss(z_acc, z_nat):.4f}")
                 first_batch = False
 
-            # Forward pass
-            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+            # Forward pass with bf16 autocast
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
 
             total_loss += loss.item()
             num_batches += 1
@@ -250,6 +344,8 @@ def train(
         collate_fn=collate_fn,
         pin_memory=True,
         num_workers=num_workers,
+        prefetch_factor=2,
+        persistent_workers=num_workers > 0,
     )
 
     val_loader = DataLoader(
@@ -259,19 +355,24 @@ def train(
         collate_fn=collate_fn,
         pin_memory=True,
         num_workers=num_workers,
+        prefetch_factor=2,
+        persistent_workers=num_workers > 0,
     )
 
     # Model
     print(f"[Train] Initializing BridgeTransformer")
-    model = BridgeTransformer(d_model=768, n_layers=4, n_heads=8, dim_feedforward=2048)
-    model = model.to(device)
+    model = BridgeTransformer(d_model=256, n_layers=4, n_heads=8, dim_feedforward=1024)
+    model = model.to(device=device, dtype=torch.bfloat16)
+    
+
+    print(f"[Train] Model: {model}")
 
     # Compile for speedup (disabled due to multiprocessing conflicts with torch.compile + DataLoader)
     # print(f"[Train] Compiling model...")
     # model = torch.compile(model)
 
     # Optimizer and scheduler
-    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, fused=True)
     scheduler = CosineAnnealingLR(optimizer, T_max=n_epochs)
 
     # Resume from checkpoint if it exists
@@ -284,18 +385,46 @@ def train(
         )
         start_epoch += 1  # Start from next epoch
 
-    # Training loop
+    print(torch.cuda.memory_allocated() / 1e9, "GB allocated")
+    print(torch.cuda.max_memory_allocated() / 1e9, "GB peak")
+    print(sum(p.numel() for p in model.parameters()), "params")
+
+    # Save config
+    config = {
+        "n_epochs": n_epochs,
+        "batch_size": batch_size,
+        "lr": lr,
+        "weight_decay": weight_decay,
+        "sigma_max": sigma_max,
+        "num_workers": num_workers,
+        "model": "BridgeTransformer",
+        "d_model": 256,
+        "n_layers": 4,
+        "n_heads": 8,
+        "dim_feedforward": 1024,
+    }
+    save_config(out_dir / "config.json", **config)
+
+    # Training loop with loss history
+    train_losses = []
+    val_losses = []
     print(f"[Train] Starting training for {n_epochs} epochs")
     for epoch in range(start_epoch, n_epochs):
         print(f"\n[Epoch {epoch+1}/{n_epochs}]")
 
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, device, sigma_max=sigma_max, profile=profile)
+        if profile:
+            train_loss = train_epoch_profile(model, train_loader, optimizer, device, sigma_max=sigma_max)
+            break  # Profile only runs once
+        else:
+            train_loss = train_epoch(model, train_loader, optimizer, device, sigma_max=sigma_max)
         print(f"  Train loss: {train_loss:.6f}")
+        train_losses.append(train_loss)
 
         # Validate
         val_loss = val_epoch(model, val_loader, device, sigma_max=sigma_max)
         print(f"  Val loss:   {val_loss:.6f}")
+        val_losses.append(val_loss)
 
         # Scheduler step
         scheduler.step()
@@ -310,8 +439,12 @@ def train(
             save_checkpoint(ckpt_best, model, optimizer, scheduler, epoch, best_val_loss)
             print(f"  ✓ New best val loss: {best_val_loss:.6f}")
 
+    # Save training history and plot
+    save_history(out_dir / "history.json", train_losses, val_losses)
+    plot_losses(out_dir / "losses.png", train_losses, val_losses)
+
     print(f"\n[Train] Complete. Best val loss: {best_val_loss:.6f}")
-    print(f"[Train] Checkpoints saved to {out_dir}")
+    print(f"[Train] Results saved to {out_dir}")
 
 
 if __name__ == "__main__":

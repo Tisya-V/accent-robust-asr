@@ -1,0 +1,13 @@
+{
+  "n_epochs": 50,
+  "batch_size": 64,
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "sigma_max": 0.5,
+  "num_workers": 10,
+  "model": "BridgeTransformer",
+  "d_model": 256,
+  "n_layers": 4,
+  "n_heads": 8,
+  "dim_feedforward": 1024
+}
