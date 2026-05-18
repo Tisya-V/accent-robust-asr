@@ -131,7 +131,7 @@ def train_epoch(
 
     pbar = tqdm(train_loader, desc="Training")
     for z_acc, z_nat, speech_end in pbar:
-        torch.autograd.set_detect_anomaly(True)
+        # torch.autograd.set_detect_anomaly(True)  # for debugging
 
         z_acc = z_acc.to(device, non_blocking=True)
         z_nat = z_nat.to(device, non_blocking=True)
