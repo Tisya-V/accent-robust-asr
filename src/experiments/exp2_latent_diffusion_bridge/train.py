@@ -6,9 +6,11 @@ Plain PyTorch with bf16 AMP, gradient clipping, and checkpoint resumption.
 
 import argparse
 import json
+import random
 from pathlib import Path
 from typing import Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -279,13 +281,6 @@ def val_epoch(
             z_nat = z_nat.to(device, non_blocking=True)
             speech_end = speech_end.to(device, non_blocking=True)
 
-            # Diagnostic: print latent scales on first batch of validation
-            if first_batch:
-                print(f"[Val latent scales] z_nat: mean={z_nat.mean():.3f}, std={z_nat.std():.3f}")
-                print(f"[Val latent scales] z_acc: mean={z_acc.mean():.3f}, std={z_acc.std():.3f}")
-                print(f"[Val latent scales] diff MSE (baseline): {F.mse_loss(z_acc, z_nat):.4f}")
-                first_batch = False
-
             # Forward pass with bf16 autocast
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
@@ -309,6 +304,9 @@ def train(
     sigma_max: float = 0.5,
     num_workers: int = 4,
     profile: bool = False,
+    notes: str = "",
+    patience: int = 5,
+    seed: int = 42,
 ):
     """
     Train the bridge model.
@@ -323,7 +321,16 @@ def train(
         weight_decay: AdamW weight decay
         sigma_max: diffusion noise schedule parameter
         num_workers: DataLoader workers
+        notes: free-text note saved to config.json (e.g. experiment description)
+        patience: early stopping patience (epochs without val loss improvement)
+        seed: random seed for reproducibility
     """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    print(f"[Train] Seed: {seed}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Train] Device: {device}")
 
@@ -339,6 +346,12 @@ def train(
 
     print(f"[Train] Train set: {len(train_dataset)}, Val set: {len(val_dataset)}")
 
+    def _worker_init_fn(worker_id: int):
+        worker_seed = seed + worker_id
+        random.seed(worker_seed)
+        np.random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -348,6 +361,8 @@ def train(
         num_workers=num_workers,
         prefetch_factor=2,
         persistent_workers=num_workers > 0,
+        worker_init_fn=_worker_init_fn,
+        generator=torch.Generator().manual_seed(seed),
     )
 
     val_loader = DataLoader(
@@ -359,6 +374,7 @@ def train(
         num_workers=num_workers,
         prefetch_factor=2,
         persistent_workers=num_workers > 0,
+        worker_init_fn=_worker_init_fn,
     )
 
     # Model
@@ -404,6 +420,9 @@ def train(
         "n_layers": 4,
         "n_heads": 8,
         "dim_feedforward": 1024,
+        "patience": patience,
+        "seed": seed,
+        "notes": notes,
     }
     save_config(out_dir / "config.json", **config)
 
@@ -415,11 +434,18 @@ def train(
         z_nat_sample = z_nat[:4].to(device, non_blocking=True)
         break
 
+    # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
+    baseline_sim = None
+    if z_acc_sample is not None:
+        baseline_sim = F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1).mean().item()
+        print(f"[Train] Baseline cosine sim (z_acc vs z_nat, no bridge): {baseline_sim:.4f}")
+
     # Training loop with loss history
     train_losses = []
     val_losses = []
     cosine_sims = {}  # Track cosine similarities: {epoch: value}
-    print(f"[Train] Starting training for {n_epochs} epochs")
+    epochs_no_improve = 0
+    print(f"[Train] Starting training for {n_epochs} epochs (patience={patience})")
     for epoch in range(start_epoch, n_epochs):
         print(f"\n[Epoch {epoch+1}/{n_epochs}]")
 
@@ -444,7 +470,8 @@ def train(
                 z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max)
                 sim = F.cosine_similarity(z_hat, z_nat_sample, dim=-1).mean().item()
                 cosine_sims[str(epoch + 1)] = sim
-                print(f"  Cosine sim: {sim:.4f} (z_acc vs z_hat vs z_nat)")
+                baseline_str = f" (baseline: {baseline_sim:.4f})" if baseline_sim is not None else ""
+                print(f"  Cosine sim (z_hat vs z_nat): {sim:.4f}{baseline_str}")
 
         # Scheduler step
         scheduler.step()
@@ -452,12 +479,19 @@ def train(
         # Save latest checkpoint (always, for resumption)
         save_checkpoint(ckpt_latest, model, optimizer, scheduler, epoch, best_val_loss)
 
-        # Save best checkpoint
+        # Save best checkpoint + early stopping counter
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_no_improve = 0
             ckpt_best = out_dir / "checkpoint_best.pt"
             save_checkpoint(ckpt_best, model, optimizer, scheduler, epoch, best_val_loss)
             print(f"  ✓ New best val loss: {best_val_loss:.6f}")
+        else:
+            epochs_no_improve += 1
+            print(f"  No improvement ({epochs_no_improve}/{patience})")
+            if epochs_no_improve >= patience:
+                print(f"[Train] Early stopping at epoch {epoch+1} (patience={patience} exceeded)")
+                break
 
     # Save training history and plot
     save_history(out_dir / "history.json", train_losses, val_losses, cosine_sims=cosine_sims if cosine_sims else None)
@@ -494,6 +528,9 @@ if __name__ == "__main__":
     parser.add_argument("--sigma_max", type=float, default=0.5, help="Noise schedule parameter")
     parser.add_argument("--num_workers", type=int, default=4, help="DataLoader workers")
     parser.add_argument("--profile", action="store_true", help="Profile first 20 batches and exit")
+    parser.add_argument("--notes", type=str, default="", help="Free-text note saved to config.json")
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (epochs without val loss improvement)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
     args = parser.parse_args()
     train(**vars(args))

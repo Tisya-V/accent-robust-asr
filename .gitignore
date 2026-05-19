@@ -39,4 +39,5 @@ hpsearch/*/trials/
 .cache/
 *.md
 .claude/
-claude-files/   
+claude-files/
+.worktrees/   

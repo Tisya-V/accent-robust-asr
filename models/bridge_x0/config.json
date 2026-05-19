@@ -1,7 +1,7 @@
 {
   "n_epochs": 50,
   "batch_size": 64,
-  "lr": 0.001,
+  "lr": 0.0001,
   "weight_decay": 0.0001,
   "sigma_max": 0.5,
   "num_workers": 10,
@@ -10,6 +10,5 @@
   "n_layers": 4,
   "n_heads": 8,
   "dim_feedforward": 1024,
-  "patience": 5,
-  "notes": ""
+  "notes": "x0-prediction, deterministic ODE, sigma_bridge sampling"
 }

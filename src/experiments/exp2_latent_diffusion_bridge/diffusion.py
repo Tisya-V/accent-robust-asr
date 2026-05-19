@@ -1,6 +1,22 @@
 """
 I²SB (Image-to-Image Schrödinger Bridge) diffusion utilities.
 Noise-prediction parameterization for latent space refinement.
+
+Forward process: z_t = (1-t)·z_nat + t·z_acc + σ_bridge(t)·ε
+  σ_bridge(t) = sigma_max·√(t(1-t))  — bridge noise (used in sample_forward)
+
+Training target (I²SB eq. 12): (z_t - z_nat) / σ_forward(t)
+  σ_forward(t) = sigma_max·√t         — forward variance (∫₀ᵗ β dτ for constant β)
+
+  Expanding: target = √t·(z_acc-z_nat)/sigma_max + √(1-t)·ε
+  At t=1: (z_acc-z_nat)/sigma_max  [bounded]
+  At t=0: ε                         [bounded]
+
+  Using σ_bridge instead of σ_forward gives √(t/(1-t))·(z_acc-z_nat)/sigma_max + ε,
+  which blows up as t→1 — that is the bug the previous code had.
+
+Recovery: z_nat_hat = z_t - σ_forward(t)·ε_pred  (I²SB footnote 1)
+Inference: deterministic ODE step z_{t'} = (1-t')·z_nat_hat + t'·z_acc  (Corollary 3.5)
 """
 
 import torch
@@ -25,7 +41,7 @@ def sample_forward(z_nat: torch.Tensor, z_acc: torch.Tensor, t: torch.Tensor, si
 
     Returns:
         z_t: [B, L, D] noisy interpolation at timestep t
-        eps: [B, L, D] sampled Gaussian noise (for loss computation)
+        eps: [B, L, D] sampled Gaussian noise (unused by bridge_loss; kept for potential debugging)
     """
     B, L, D = z_nat.shape
     device, dtype = z_nat.device, z_nat.dtype
@@ -71,29 +87,30 @@ def bridge_loss(
         sigma_max: noise schedule parameter
 
     Returns:
-        loss: scalar loss (mean over batch and time)
+        loss: scalar loss (mean over speech frames)
     """
     B, L, D = z_nat.shape
     device = z_nat.device
 
-    # Sample random timesteps for each batch element
     t = torch.rand(B, device=device)
 
-    # Compute noisy z_t and sample noise
-    z_t, eps = sample_forward(z_nat, z_acc, t, sigma_max=sigma_max)
+    # z_t from forward process (raw eps not needed — we derive target from z_t directly)
+    z_t, _ = sample_forward(z_nat, z_acc, t, sigma_max=sigma_max)
 
-    # Predict noise
+    # Noise target: (z_t - z_nat) / σ_forward(t)  — see module docstring
+    # σ_forward = sigma_max·√t  (forward variance from z_nat side, bounded at t=1)
+    t_expanded = t.view(B, 1, 1)
+    sigma_forward = sigma_max * torch.sqrt(t_expanded.clamp(min=1e-5))
+    eps_target = (z_t - z_nat) / (sigma_forward + 1e-8)
+
     eps_pred = model(z_t, t)
-    
-    # MSE on noise prediction
-    # Optional: mask padding frames (frames after speech_end)
+
     if speech_end is not None:
         mask = torch.arange(L, device=device).unsqueeze(0) < speech_end.unsqueeze(1)  # [B, L]
-        mask = mask.unsqueeze(-1).expand_as(eps_pred)  # [B, L, 1]
-        loss = F.mse_loss(eps_pred[mask], eps[mask])
-
+        mask = mask.unsqueeze(-1).expand_as(eps_pred)  # [B, L, D]
+        loss = F.mse_loss(eps_pred[mask], eps_target[mask])
     else:
-        loss = F.mse_loss(eps_pred, eps)
+        loss = F.mse_loss(eps_pred, eps_target)
 
     return loss
 
@@ -107,35 +124,27 @@ def bridge_inference(
     """
     Reverse diffusion: map z_acc (corrupted) → z_nat_hat (corrected).
 
-    Uses deterministic ODE reverse from t=1→0.
+    Deterministic ODE reverse from t=1→0 (Corollary 3.5 of I²SB paper).
 
-    Intuition:
-    - At t=0: z_t ≈ z_nat (clean, target)
-    - At t=1: z_t ≈ z_acc (corrupted, input)
-    - We reverse: start at z_acc, iteratively predict noise and step toward z_nat
-
-    At each step, we:
-    1. Predict noise ε_pred from z_t
-    2. Recover implicit z_nat_hat = (z_t - t·z_acc - σ(t)·ε_pred) / (1-t)
-    3. Interpolate toward it: z_{t-dt} = (1-(t-dt))·z_nat_hat + (t-dt)·z_acc + σ(t-dt)·ε_pred
+    At each step:
+    1. Predict ε_pred ≈ (z_t - z_nat) / σ_forward(t)
+    2. Recover z_nat_hat = z_t - σ_forward(t)·ε_pred  (I²SB footnote 1)
+    3. ODE step: z_{t'} = (1-t')·z_nat_hat + t'·z_acc  (no stochastic noise)
+    Final step returns z_nat_hat directly.
 
     Args:
         model: BridgeTransformer for noise prediction
         z_acc: [B, L, D] accented (corrupted) encoder states
-        n_steps: number of ODE steps (trade-off: more steps → better quality but slower)
+        n_steps: number of ODE steps
         sigma_max: noise schedule parameter
 
     Returns:
-        z_nat_hat: [B, L, D] corrected (denoised) encoder states
+        z_nat_hat: [B, L, D] corrected encoder states
     """
     B, L, D = z_acc.shape
     device, dtype = z_acc.device, z_acc.dtype
 
-    # Time schedule: reverse from t=1 to t=0 in n_steps
-    # Using uniform steps for simplicity (could use more sophisticated schedules)
     t_schedule = torch.linspace(1.0, 0.0, n_steps + 1, device=device, dtype=dtype)
-
-    # Start with z_t ≈ z_acc (at t=1)
     z_t = z_acc.clone()
 
     model.eval()
@@ -143,24 +152,20 @@ def bridge_inference(
         for i in range(n_steps):
             t_cur = t_schedule[i]
             t_next = t_schedule[i + 1]
-            dt = t_next - t_cur  # Negative (going backward in time)
 
-            # Current timestep tensor [B]
             t_cur_batch = torch.full((B,), t_cur, device=device, dtype=dtype)
-
-            # Predict noise at current step
             eps_pred = model(z_t, t_cur_batch)
 
-            # Compute noise scales (clamp to avoid sqrt(0) NaN in bf16)
-            sigma_t_cur = sigma_max * torch.sqrt(torch.clamp(t_cur * (1 - t_cur), min=1e-5))
-            sigma_t_next = sigma_max * torch.sqrt(torch.clamp(t_next * (1 - t_next), min=1e-5))
+            # σ_forward(t) = sigma_max·√t — must match training target denominator
+            sigma_forward_cur = sigma_max * torch.sqrt(torch.clamp(t_cur, min=1e-5))
 
-            # Implicit z_nat estimation:
-            # From z_t = (1-t)·z_nat + t·z_acc + σ(t)·ε_pred
-            # Solve for z_nat: z_nat = (z_t - t·z_acc - σ(t)·ε_pred) / (1-t)
-            z_nat_hat = (z_t - t_cur * z_acc - sigma_t_cur * eps_pred) / (1 - t_cur + 1e-8)
+            # Recover z_nat estimate (I²SB footnote 1): X₀ = Xₜ - σ_forward·ε_pred
+            z_nat_hat = z_t - sigma_forward_cur * eps_pred
 
-            # Step toward next timestep using implicit z_nat
-            z_t = (1 - t_next) * z_nat_hat + t_next * z_acc + sigma_t_next.view(-1, 1, 1) * eps_pred
+            if i == n_steps - 1:
+                break
 
-    return z_t
+            # Deterministic ODE step (Corollary 3.5): no stochastic noise injection
+            z_t = (1 - t_next) * z_nat_hat + t_next * z_acc
+
+    return z_nat_hat
