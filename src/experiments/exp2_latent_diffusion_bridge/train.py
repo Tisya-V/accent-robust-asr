@@ -139,12 +139,12 @@ def _compute_loss(model, batch, device, sigma_max, alignment):
     """Dispatch to position or DTW loss based on alignment."""
     if alignment == "dtw":
         z_acc, z_nat, l2_speech_end, nat_speech_end, paths = batch
-        z_acc         = z_acc.to(device, non_blocking=True)
-        z_nat         = z_nat.to(device, non_blocking=True)
-        l2_speech_end = l2_speech_end.to(device, non_blocking=True)
+        # z_nat and z_acc intentionally kept on CPU — bridge_loss_dtw uses them
+        # for numpy computation and handles device placement internally
+        l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
-                               paths, sigma_max=sigma_max)
+                               paths, sigma_max=sigma_max, device=device)
     else:
         z_acc, z_nat, l2_speech_end, nat_speech_end = batch
         z_acc         = z_acc.to(device, non_blocking=True)

@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N precompute_dtw
 #PBS -l select=1:ncpus=8:mem=16gb
-#PBS -l walltime=00:30:00
+#PBS -l walltime=02:00:00
 #PBS -o logs/precompute_dtw.out
 #PBS -e logs/precompute_dtw.err
 #PBS -j oe
