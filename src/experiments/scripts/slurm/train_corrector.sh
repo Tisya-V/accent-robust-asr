@@ -9,7 +9,7 @@
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=64G
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/corrector_position_%j.log
 #SBATCH --error=logs/corrector_position_%j.log
@@ -28,14 +28,14 @@ python -m src.experiments.exp2_transformer_bridge.train \
     --mapping_val_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json \
     --out_dir models/corrector_position \
     --n_epochs 12 \
-    --batch_size 32 \
+    --batch_size 128 \
     --lr 3e-4 \
     --d_model 256 \
     --n_layers 4 \
     --dim_feedforward 1024 \
     --patience 5 \
-    --num_workers 4 \
-    --notes "position-based feasibility, no DTW, lr=3e-4"
+    --num_workers 6\
+    --notes "position-based feasibility, no DTW, lr=3e-4, mse all positions"
 
 echo "[Job] Training done at $(date)"
 

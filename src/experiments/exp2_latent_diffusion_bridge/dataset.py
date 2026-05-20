@@ -3,6 +3,7 @@ BridgeDataset: load paired encoder states for diffusion bridge training.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -21,20 +22,12 @@ class BridgeDataset(Dataset):
     """
 
     def __init__(self, mapping_path: str, split: str = "train"):
-        """
-        Args:
-            mapping_path: path to mapping JSON (e.g., mapping_train.json)
-            split: "train" or "dev" — indicates which split the mapping covers
-                   (used to find the correct data directory)
-        """
         self.mapping_path = Path(mapping_path)
         self.split = split
 
-        # Load mapping
         with open(self.mapping_path) as f:
             self.pairs = json.load(f)
 
-        # Get data directory for this split (from env var or default)
         if split == "train":
             self.data_dir = get_split_data_dir("train")
         elif split == "dev":
@@ -43,32 +36,34 @@ class BridgeDataset(Dataset):
             raise ValueError(f"Unknown split: {split}")
 
         print(f"[BridgeDataset] Loaded {len(self.pairs)} pairs from {self.mapping_path}")
-        print(f"[BridgeDataset] Data dir: {self.data_dir}")
+        print(f"[BridgeDataset] Resolving file paths...")
+        self._resolved = self._resolve_all_paths()
+        missing = sum(1 for l, n in self._resolved if l is None or n is None)
+        print(f"[BridgeDataset] Resolved {len(self.pairs)} pairs ({missing} missing)")
+
+    def _find_file(self, rel_path: str) -> Optional[Path]:
+        for split_name in ["train", "dev"]:
+            p = get_split_data_dir(split_name) / rel_path
+            if p.exists():
+                return p
+        return None
+
+    def _resolve_all_paths(self):
+        """Pre-resolve all file paths using threads — NFS stat calls release the GIL."""
+        unique = list({p for pair in self.pairs
+                       for p in (pair["l2_encoder_state_path"], pair["nat_encoder_state_path"])})
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            resolved = dict(zip(unique, ex.map(self._find_file, unique)))
+        return [(resolved[pair["l2_encoder_state_path"]],
+                 resolved[pair["nat_encoder_state_path"]])
+                for pair in self.pairs]
 
     def __len__(self) -> int:
         return len(self.pairs)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
-        """
-        Load a pair of encoder states.
-
-        Returns:
-            z_acc: [1500, 768] float32 accented encoder hidden state
-            z_nat: [1500, 768] float32 native encoder hidden state
-            speech_end: int frame index where speech ends (for masking)
-        """
         pair = self.pairs[idx]
-
-        # Try to find encoder states in either train or dev directory
-        def find_file(rel_path):
-            for split_name in ["train", "dev"]:
-                full_path = get_split_data_dir(split_name) / rel_path
-                if full_path.exists():
-                    return full_path
-            return None
-
-        l2_path = find_file(pair["l2_encoder_state_path"])
-        nat_path = find_file(pair["nat_encoder_state_path"])
+        l2_path, nat_path = self._resolved[idx]
 
         if l2_path is None:
             raise FileNotFoundError(f"Missing L2 encoder state: {pair['l2_encoder_state_path']}")

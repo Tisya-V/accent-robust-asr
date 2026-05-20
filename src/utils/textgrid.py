@@ -27,6 +27,40 @@ class PhoneSegment:
         return self.end - self.start
 
 
+def parse_lab_file(lab_path: str) -> List[PhoneSegment]:
+    """
+    Parse a CMU ARCTIC .lab file and return PhoneSegments.
+    Silence tokens (pau) are excluded; stress digits are stripped.
+    """
+    path = Path(lab_path)
+    if not path.exists():
+        raise FileNotFoundError(f"LAB file not found: {lab_path}")
+
+    raw = []
+    for line in path.read_text().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 3:
+            try:
+                raw.append((float(parts[0]), parts[2]))
+            except ValueError:
+                pass
+
+    segments: List[PhoneSegment] = []
+    for i, (end_time, text) in enumerate(raw):
+        label = text.rstrip("012").upper()
+        if label in SILENCE_LABELS:
+            continue
+        start_time = raw[i - 1][0] if i > 0 else 0.0
+        segments.append(PhoneSegment(
+            label    = label,
+            start    = start_time,
+            end      = end_time,
+            phone_id = PHONE2ID.get(label, -1),
+        ))
+
+    return segments
+
+
 def parse_textgrid(
     textgrid_path: str,
     tier_name: str = "phones",
