@@ -128,10 +128,10 @@ def precompute(mapping_paths: list[Path], cache_dir: Path, workers: int) -> None
 
     if total_pairs - already > 0:
         errors = 0
-        # chunksize > 1 amortises IPC overhead; groups are already ~3 pairs each
-        chunksize = max(1, len(group_items) // (workers * 4))
+        # chunksize=1: each group is ~500ms of work so IPC overhead is negligible,
+        # and we get live tqdm updates rather than waiting for a large chunk to finish
         with Pool(processes=workers) as pool, tqdm(total=total_pairs, unit="pair") as pbar:
-            for group_results in pool.imap_unordered(_compute_group, group_items, chunksize=chunksize):
+            for group_results in pool.imap_unordered(_compute_group, group_items):
                 for _, err in group_results:
                     if err:
                         errors += 1
