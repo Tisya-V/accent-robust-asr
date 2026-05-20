@@ -429,16 +429,20 @@ def train(
     # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
     z_acc_sample = None
     z_nat_sample = None
-    for z_acc, z_nat, _ in train_loader:
-        z_acc_sample = z_acc[:4].to(device, non_blocking=True)  # Use first 4 samples
-        z_nat_sample = z_nat[:4].to(device, non_blocking=True)
+    speech_end_sample = None
+    for z_acc, z_nat, speech_end in train_loader:
+        z_acc_sample      = z_acc[:4].to(device, non_blocking=True)
+        z_nat_sample      = z_nat[:4].to(device, non_blocking=True)
+        speech_end_sample = speech_end[:4].to(device, non_blocking=True)
         break
 
     # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
     baseline_sim = None
     if z_acc_sample is not None:
-        baseline_sim = F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1).mean().item()
-        print(f"[Train] Baseline cosine sim (z_acc vs z_nat, no bridge): {baseline_sim:.4f}")
+        mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < speech_end_sample.unsqueeze(1)
+        sim_per = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
+        baseline_sim = sim_per.mean().item()
+        print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
 
     # Training loop with loss history
     train_losses = []
@@ -468,10 +472,12 @@ def train(
             from .diffusion import bridge_inference
             with torch.no_grad():
                 z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max)
-                sim = F.cosine_similarity(z_hat, z_nat_sample, dim=-1).mean().item()
+                mask = torch.arange(z_hat.shape[1], device=device).unsqueeze(0) < speech_end_sample.unsqueeze(1)
+                sim_per = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
+                sim = sim_per.mean().item()
                 cosine_sims[str(epoch + 1)] = sim
                 baseline_str = f" (baseline: {baseline_sim:.4f})" if baseline_sim is not None else ""
-                print(f"  Cosine sim (z_hat vs z_nat): {sim:.4f}{baseline_str}")
+                print(f"  Cosine sim (z_hat vs z_nat, speech frames only): {sim:.4f}{baseline_str}")
 
         # Scheduler step
         scheduler.step()

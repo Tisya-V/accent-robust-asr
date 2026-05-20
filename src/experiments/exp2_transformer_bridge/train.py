@@ -41,12 +41,6 @@ def collate_fn(batch):
     )
 
 
-def masked_mse_loss(z_pred: torch.Tensor, z_nat: torch.Tensor, speech_end: torch.Tensor) -> torch.Tensor:
-    """MSE loss on speech frames only. Boolean indexing matches bridge — operates on ~14% of frames."""
-    _, L, _ = z_pred.shape
-    mask = torch.arange(L, device=z_pred.device).unsqueeze(0) < speech_end.unsqueeze(1)  # [B, L]
-    mask3d = mask.unsqueeze(-1).expand_as(z_pred)
-    return F.mse_loss(z_pred[mask3d], z_nat[mask3d])
 
 
 def masked_cosine_sim(z_pred: torch.Tensor, z_nat: torch.Tensor, speech_end: torch.Tensor) -> float:
@@ -90,12 +84,10 @@ def train_epoch(model, loader, optimizer, device) -> float:
     for z_acc, z_nat, speech_end in pbar:
         z_acc = z_acc.to(device, non_blocking=True)
         z_nat = z_nat.to(device, non_blocking=True)
-        speech_end = speech_end.to(device, non_blocking=True)
-
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             z_pred = model(z_acc)
-            loss = masked_mse_loss(z_pred, z_nat, speech_end)
+            loss = F.mse_loss(z_pred, z_nat)
 
         loss.backward()
         clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -120,7 +112,7 @@ def val_epoch(model, loader, device) -> tuple[float, float]:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 z_pred = model(z_acc)
 
-            total_loss += masked_mse_loss(z_pred, z_nat, speech_end).item()
+            total_loss += F.mse_loss(z_pred, z_nat).item()
             total_sim += masked_cosine_sim(z_pred, z_nat, speech_end)
             n += 1
     return total_loss / n, total_sim / n
@@ -131,7 +123,7 @@ def plot_and_save(out_dir: Path, train_losses, val_losses, cosine_sims):
     epochs = range(1, len(train_losses) + 1)
     ax1.plot(epochs, train_losses, "b-", label="Train")
     ax1.plot(epochs, val_losses, "r-", label="Val")
-    ax1.set_xlabel("Epoch"); ax1.set_ylabel("MSE Loss (speech frames)")
+    ax1.set_xlabel("Epoch"); ax1.set_ylabel("MSE Loss (all frames)")
     ax1.set_title("Loss"); ax1.legend(); ax1.grid(True, alpha=0.3)
 
     if cosine_sims:
@@ -170,7 +162,7 @@ def profile_run(model, loader, optimizer, device, n_batches: int = 30):
         t = time.time()
         with torch.autocast("cuda", dtype=torch.bfloat16):
             z_pred = model(z_acc)
-            loss = masked_mse_loss(z_pred, z_nat, speech_end)
+            loss = F.mse_loss(z_pred, z_nat)
         torch.cuda.synchronize()
         t_fwd += time.time() - t
 
@@ -233,7 +225,7 @@ def train(
 
     loader_kwargs = dict(
         collate_fn=collate_fn, pin_memory=True, num_workers=num_workers,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=4 if num_workers > 0 else None,
         persistent_workers=num_workers > 0, worker_init_fn=worker_init,
     )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)

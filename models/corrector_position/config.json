@@ -1,0 +1,12 @@
+{
+  "n_epochs": 12,
+  "batch_size": 128,
+  "lr": 0.0003,
+  "weight_decay": 0.0001,
+  "d_model": 256,
+  "n_layers": 4,
+  "dim_feedforward": 1024,
+  "patience": 5,
+  "seed": 42,
+  "notes": "position-based feasibility, no DTW, lr=3e-4, mse all positions"
+}
