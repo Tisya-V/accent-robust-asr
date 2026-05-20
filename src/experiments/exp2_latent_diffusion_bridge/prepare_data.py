@@ -135,9 +135,9 @@ def build_training_pairs(
             skipped[f"missing_l2_file"] += 1
             continue
 
-        # Compute speech_end_frame from L2 wav
+        # Compute l2_speech_end_frame from L2 wav
         try:
-            speech_end_frame = compute_speech_end_frame(l2_utt["wav_path"])
+            l2_speech_end_frame = compute_speech_end_frame(l2_utt["wav_path"])
         except Exception:
             skipped["duration_error"] += 1
             continue
@@ -167,8 +167,15 @@ def build_training_pairs(
                 skipped[f"missing_cmu_file_{cmu_speaker}"] += 1
                 continue
 
+            # Compute nat_speech_end_frame from CMU wav
+            try:
+                nat_speech_end_frame = compute_speech_end_frame(cmu_utt["wav_path"])
+            except Exception:
+                skipped["nat_duration_error"] += 1
+                continue
+
             # Save paths relative to their split directory for cross-environment portability
-            l2_rel_path = l2_path.relative_to(data_dirs[l2_split])
+            l2_rel_path  = l2_path.relative_to(data_dirs[l2_split])
             cmu_rel_path = cmu_path.relative_to(data_dirs[cmu_split])
 
             pair = {
@@ -179,7 +186,8 @@ def build_training_pairs(
                 "nat_speaker": cmu_speaker,
                 "nat_utterance_id": cmu_utt["utterance_id"],
                 "nat_encoder_state_path": str(cmu_rel_path),
-                "speech_end_frame": speech_end_frame,
+                "l2_speech_end_frame": l2_speech_end_frame,
+                "nat_speech_end_frame": nat_speech_end_frame,
                 "text": l2_utt.get("text", ""),
                 "l1": l2_utt.get("l1", "Unknown"),
                 "bridge_split": "train",  # Will be reassigned during stratified split
