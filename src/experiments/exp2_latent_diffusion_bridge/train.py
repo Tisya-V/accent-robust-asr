@@ -22,17 +22,31 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from .model import BridgeTransformer
-from .diffusion import bridge_loss
+from .diffusion import bridge_loss, bridge_loss_dtw
 from .dataset import BridgeDataset
 
 
 def collate_fn(batch):
-    """Stack batch into tensors."""
-    z_accs, z_nats, speech_ends = zip(*batch)
-    z_acc = torch.stack(z_accs)  # [B, 1500, 768]
-    z_nat = torch.stack(z_nats)  # [B, 1500, 768]
-    speech_end = torch.tensor(speech_ends)  # [B]
-    return z_acc, z_nat, speech_end
+    """Stack batch into tensors (position alignment)."""
+    z_accs, z_nats, l2_ends, nat_ends = zip(*batch)
+    return (
+        torch.stack(z_accs),        # [B, 1500, 768]
+        torch.stack(z_nats),        # [B, 1500, 768]
+        torch.tensor(l2_ends),      # [B]
+        torch.tensor(nat_ends),     # [B]
+    )
+
+
+def collate_fn_dtw(batch):
+    """Stack tensors and collect DTW paths as a list (variable-length, cannot stack)."""
+    z_accs, z_nats, l2_ends, nat_ends, paths = zip(*batch)
+    return (
+        torch.stack(z_accs),        # [B, 1500, 768]
+        torch.stack(z_nats),        # [B, 1500, 768]
+        torch.tensor(l2_ends),      # [B]
+        torch.tensor(nat_ends),     # [B]
+        list(paths),                # list[np.ndarray], variable P per item
+    )
 
 
 def save_checkpoint(
@@ -121,12 +135,31 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
     plt.close()
 
 
+def _compute_loss(model, batch, device, sigma_max, alignment):
+    """Dispatch to position or DTW loss based on alignment."""
+    if alignment == "dtw":
+        z_acc, z_nat, l2_speech_end, nat_speech_end, paths = batch
+        z_acc         = z_acc.to(device, non_blocking=True)
+        z_nat         = z_nat.to(device, non_blocking=True)
+        l2_speech_end = l2_speech_end.to(device, non_blocking=True)
+        nat_speech_end = nat_speech_end.to(device, non_blocking=True)
+        return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
+                               paths, sigma_max=sigma_max)
+    else:
+        z_acc, z_nat, l2_speech_end, nat_speech_end = batch
+        z_acc         = z_acc.to(device, non_blocking=True)
+        z_nat         = z_nat.to(device, non_blocking=True)
+        l2_speech_end = l2_speech_end.to(device, non_blocking=True)
+        return bridge_loss(model, z_nat, z_acc, l2_speech_end, sigma_max=sigma_max)
+
+
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     sigma_max: float = 0.5,
+    alignment: str = "position",
 ) -> float:
     """Train for one epoch. Returns average loss."""
     model.train()
@@ -134,24 +167,14 @@ def train_epoch(
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
-    for z_acc, z_nat, speech_end in pbar:
-        # torch.autograd.set_detect_anomaly(True)  # for debugging
-
-        z_acc = z_acc.to(device, non_blocking=True)
-        z_nat = z_nat.to(device, non_blocking=True)
-        speech_end = speech_end.to(device, non_blocking=True)
-
+    for batch in pbar:
         optimizer.zero_grad()
 
-        # Forward pass with bf16 autocast
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+            loss = _compute_loss(model, batch, device, sigma_max, alignment)
 
-        # Backward
         loss.backward()
         clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-        # Optimizer step
         optimizer.step()
 
         total_loss += loss.item()
@@ -159,8 +182,7 @@ def train_epoch(
         pbar.set_postfix({"loss": f"{loss.item():.6f}"})
 
     pbar.close()
-    avg_loss = total_loss / num_batches
-    return avg_loss
+    return total_loss / num_batches
 
 
 def train_epoch_profile(
@@ -193,15 +215,15 @@ def train_epoch_profile(
         # Time data loading
         t_load_start = time.time()
         try:
-            z_acc, z_nat, speech_end = next(iterator)
+            z_acc, z_nat, l2_speech_end, nat_speech_end = next(iterator)
         except StopIteration:
             break
         time_load += time.time() - t_load_start
 
         t_todevice_start = time.time()
-        z_acc = z_acc.to(device, non_blocking=True)
-        z_nat = z_nat.to(device, non_blocking=True)
-        speech_end = speech_end.to(device, non_blocking=True)
+        z_acc         = z_acc.to(device, non_blocking=True)
+        z_nat         = z_nat.to(device, non_blocking=True)
+        l2_speech_end = l2_speech_end.to(device, non_blocking=True)
         torch.cuda.synchronize() if device.type == "cuda" else None
         time_todevice += time.time() - t_todevice_start
 
@@ -213,7 +235,7 @@ def train_epoch_profile(
         # Forward pass with bf16 autocast
         t_fwd_start = time.time()
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
+            loss = bridge_loss(model, z_nat, z_acc, l2_speech_end, sigma_max=sigma_max)
         torch.cuda.synchronize() if device.type == "cuda" else None
         time_fwd += time.time() - t_fwd_start
 
@@ -267,6 +289,7 @@ def val_epoch(
     val_loader: DataLoader,
     device: torch.device,
     sigma_max: float = 0.5,
+    alignment: str = "position",
 ) -> float:
     """Validate for one epoch. Returns average loss."""
     model.eval()
@@ -275,28 +298,21 @@ def val_epoch(
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
-        first_batch = True
-        for z_acc, z_nat, speech_end in pbar:
-            z_acc = z_acc.to(device, non_blocking=True)
-            z_nat = z_nat.to(device, non_blocking=True)
-            speech_end = speech_end.to(device, non_blocking=True)
-
-            # Forward pass with bf16 autocast
+        for batch in pbar:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = bridge_loss(model, z_nat, z_acc, speech_end, sigma_max=sigma_max)
-
+                loss = _compute_loss(model, batch, device, sigma_max, alignment)
             total_loss += loss.item()
             num_batches += 1
             pbar.set_postfix({"loss": f"{loss.item():.6f}"})
 
-    avg_loss = total_loss / num_batches
-    return avg_loss
+    return total_loss / num_batches
 
 
 def train(
     mapping_train_path: str = "src/experiments/exp2_latent_diffusion_bridge/data/mapping_train.json",
     mapping_val_path: str = "src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json",
     out_dir: str = "models/bridge",
+    alignment: str = "position",
     n_epochs: int = 50,
     batch_size: int = 32,
     lr: float = 1e-4,
@@ -338,11 +354,11 @@ def train(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load datasets
-    print(f"[Train] Loading training data from {mapping_train_path}")
-    train_dataset = BridgeDataset(mapping_train_path, split="train")
+    print(f"[Train] Loading training data from {mapping_train_path} (alignment={alignment})")
+    train_dataset = BridgeDataset(mapping_train_path, split="train", alignment=alignment)
 
     print(f"[Train] Loading validation data from {mapping_val_path}")
-    val_dataset = BridgeDataset(mapping_val_path, split="dev")
+    val_dataset = BridgeDataset(mapping_val_path, split="dev", alignment=alignment)
 
     print(f"[Train] Train set: {len(train_dataset)}, Val set: {len(val_dataset)}")
 
@@ -352,11 +368,13 @@ def train(
         np.random.seed(worker_seed)
         torch.manual_seed(worker_seed)
 
+    _collate = collate_fn_dtw if alignment == "dtw" else collate_fn
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=_collate,
         pin_memory=True,
         num_workers=num_workers,
         prefetch_factor=2,
@@ -369,7 +387,7 @@ def train(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=collate_fn,
+        collate_fn=_collate,
         pin_memory=True,
         num_workers=num_workers,
         prefetch_factor=2,
@@ -409,6 +427,7 @@ def train(
 
     # Save config
     config = {
+        "alignment": alignment,
         "n_epochs": n_epochs,
         "batch_size": batch_size,
         "lr": lr,
@@ -427,19 +446,19 @@ def train(
     save_config(out_dir / "config.json", **config)
 
     # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
-    z_acc_sample = None
-    z_nat_sample = None
-    speech_end_sample = None
-    for z_acc, z_nat, speech_end in train_loader:
-        z_acc_sample      = z_acc[:4].to(device, non_blocking=True)
-        z_nat_sample      = z_nat[:4].to(device, non_blocking=True)
-        speech_end_sample = speech_end[:4].to(device, non_blocking=True)
+    z_acc_sample          = None
+    z_nat_sample          = None
+    l2_speech_end_sample  = None
+    for z_acc, z_nat, l2_speech_end, nat_speech_end in train_loader:
+        z_acc_sample         = z_acc[:4].to(device, non_blocking=True)
+        z_nat_sample         = z_nat[:4].to(device, non_blocking=True)
+        l2_speech_end_sample = l2_speech_end[:4].to(device, non_blocking=True)
         break
 
     # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
     baseline_sim = None
     if z_acc_sample is not None:
-        mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < speech_end_sample.unsqueeze(1)
+        mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < l2_speech_end_sample.unsqueeze(1)
         sim_per = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
         baseline_sim = sim_per.mean().item()
         print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
@@ -458,12 +477,13 @@ def train(
             train_loss = train_epoch_profile(model, train_loader, optimizer, device, sigma_max=sigma_max)
             break  # Profile only runs once
         else:
-            train_loss = train_epoch(model, train_loader, optimizer, device, sigma_max=sigma_max)
+            train_loss = train_epoch(model, train_loader, optimizer, device,
+                                     sigma_max=sigma_max, alignment=alignment)
         print(f"  Train loss: {train_loss:.6f}")
         train_losses.append(train_loss)
 
         # Validate
-        val_loss = val_epoch(model, val_loader, device, sigma_max=sigma_max)
+        val_loss = val_epoch(model, val_loader, device, sigma_max=sigma_max, alignment=alignment)
         print(f"  Val loss:   {val_loss:.6f}")
         val_losses.append(val_loss)
 
@@ -472,7 +492,7 @@ def train(
             from .diffusion import bridge_inference
             with torch.no_grad():
                 z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max)
-                mask = torch.arange(z_hat.shape[1], device=device).unsqueeze(0) < speech_end_sample.unsqueeze(1)
+                mask = torch.arange(z_hat.shape[1], device=device).unsqueeze(0) < l2_speech_end_sample.unsqueeze(1)
                 sim_per = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
                 sim = sim_per.mean().item()
                 cosine_sims[str(epoch + 1)] = sim
@@ -524,8 +544,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out_dir",
         type=str,
-        default="models/bridge",
-        help="Output directory for checkpoints",
+        default=None,
+        help="Output directory for checkpoints (defaults to models/bridge or models/bridge_dtw)",
+    )
+    parser.add_argument(
+        "--alignment",
+        type=str,
+        default="position",
+        choices=["position", "dtw"],
+        help="Forward process alignment: position (frame-by-frame) or dtw (alpha-timeline)",
     )
     parser.add_argument("--n_epochs", type=int, default=50, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
@@ -539,4 +566,6 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
     args = parser.parse_args()
+    if args.out_dir is None:
+        args.out_dir = "models/bridge_dtw" if args.alignment == "dtw" else "models/bridge"
     train(**vars(args))

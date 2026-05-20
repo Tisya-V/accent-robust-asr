@@ -13,6 +13,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/corrector_position_%j.log
 #SBATCH --error=logs/corrector_position_%j.log
+#SBATCH --requeue
 
 source scripts/slurm_env.sh
 cd "${PROJECT_ROOT}"
