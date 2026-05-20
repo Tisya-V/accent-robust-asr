@@ -313,6 +313,7 @@ def train(
     mapping_val_path: str = "src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json",
     out_dir: str = "models/bridge",
     alignment: str = "position",
+    dtw_cache: str = "src/experiments/exp2_latent_diffusion_bridge/dtw_cache/dtw_paths.pkl",
     n_epochs: int = 50,
     batch_size: int = 32,
     lr: float = 1e-4,
@@ -355,10 +356,12 @@ def train(
 
     # Load datasets
     print(f"[Train] Loading training data from {mapping_train_path} (alignment={alignment})")
-    train_dataset = BridgeDataset(mapping_train_path, split="train", alignment=alignment)
+    train_dataset = BridgeDataset(mapping_train_path, split="train", alignment=alignment,
+                                  dtw_cache=dtw_cache)
 
     print(f"[Train] Loading validation data from {mapping_val_path}")
-    val_dataset = BridgeDataset(mapping_val_path, split="dev", alignment=alignment)
+    val_dataset = BridgeDataset(mapping_val_path, split="dev", alignment=alignment,
+                                dtw_cache=dtw_cache)
 
     print(f"[Train] Train set: {len(train_dataset)}, Val set: {len(val_dataset)}")
 

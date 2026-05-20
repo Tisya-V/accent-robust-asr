@@ -3,9 +3,10 @@ BridgeDataset: load paired encoder states for diffusion bridge training.
 """
 
 import json
+import pickle
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import torch
@@ -24,11 +25,13 @@ class BridgeDataset(Dataset):
     Args:
         mapping_path: path to mapping JSON
         split:        "train" or "dev"
-        alignment:    "position" (default) or "dtw" — if "dtw", loads precomputed
-                      DTW paths from the dtw_path field in the mapping JSON
+        alignment:    "position" (default) or "dtw" — if "dtw", loads the precomputed
+                      dtw_paths.pkl into RAM once; each __getitem__ is a dict lookup
+        dtw_cache:    path to the dtw_paths.pkl file (default: data/bridge_dtw_cache/dtw_paths.pkl)
     """
 
-    def __init__(self, mapping_path: str, split: str = "train", alignment: str = "position"):
+    def __init__(self, mapping_path: str, split: str = "train", alignment: str = "position",
+                 dtw_cache: str = "src/experiments/exp2_latent_diffusion_bridge/dtw_cache/dtw_paths.pkl"):
         self.mapping_path = Path(mapping_path)
         self.split        = split
         self.alignment    = alignment
@@ -47,12 +50,30 @@ class BridgeDataset(Dataset):
         missing = sum(1 for l, n in self._resolved if l is None or n is None)
         print(f"[BridgeDataset] {len(self.pairs)} pairs ({missing} missing encoder states)")
 
+        self._dtw_paths: dict = {}
         if alignment == "dtw":
-            missing_dtw = sum(1 for p in self.pairs if not p.get("dtw_path"))
+            pkl = Path(dtw_cache)
+            if not pkl.is_absolute():
+                # Resolve relative to project root (two levels up from this file's package)
+                pkl = Path(__file__).resolve().parents[4] / dtw_cache
+            if not pkl.exists():
+                raise RuntimeError(
+                    f"DTW cache not found at {pkl} — run precompute_dtw.py first."
+                )
+            print(f"[BridgeDataset] Loading DTW path cache from {pkl} ...")
+            with open(pkl, "rb") as f:
+                self._dtw_paths = pickle.load(f)
+            # Verify coverage
+            missing_dtw = sum(
+                1 for p in self.pairs
+                if (p["l2_encoder_state_path"], p["nat_encoder_state_path"]) not in self._dtw_paths
+            )
             if missing_dtw:
                 raise RuntimeError(
-                    f"{missing_dtw} pairs missing dtw_path — run precompute_dtw.py first."
+                    f"{missing_dtw}/{len(self.pairs)} pairs missing from DTW cache — "
+                    f"re-run precompute_dtw.py."
                 )
+            print(f"[BridgeDataset] DTW cache loaded ({len(self._dtw_paths)} paths).")
 
     def _find_file(self, rel_path: str) -> Optional[Path]:
         for split_name in ["train", "dev"]:
@@ -96,7 +117,8 @@ class BridgeDataset(Dataset):
         nat_speech_end = pair["nat_speech_end_frame"]
 
         if self.alignment == "dtw":
-            path_arr = np.load(pair["dtw_path"])  # [P, 2] int16
+            key      = (pair["l2_encoder_state_path"], pair["nat_encoder_state_path"])
+            path_arr = self._dtw_paths[key]  # [P, 2] int16 — in-memory dict lookup
             return z_acc, z_nat, l2_speech_end, nat_speech_end, path_arr
 
         return z_acc, z_nat, l2_speech_end, nat_speech_end

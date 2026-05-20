@@ -31,7 +31,7 @@ echo "Track:    tail -f ${RUNTIME_LOG}"
 echo "=========================================="
 
 python -u -m src.experiments.exp2_latent_diffusion_bridge.precompute_dtw \
-    --cache_dir data/bridge_dtw_cache \
+    --cache_dir src/experiments/exp2_latent_diffusion_bridge/dtw_cache \
     --workers 8
 
 echo "Done at $(date)"

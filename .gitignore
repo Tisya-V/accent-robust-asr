@@ -36,6 +36,7 @@ src/analysis/results/*.pkl
 /nltk_data/
 archive/
 hpsearch/*/trials/
+src/experiments/exp2_latent_diffusion_bridge/dtw_cache/
 .cache/
 *.md
 .claude/
