@@ -165,6 +165,7 @@ def sample_forward_dtw(
     path_arr: np.ndarray,
     T_eng: int,
     T_l2: int,
+    eps: np.ndarray,
     sigma_max: float = 0.5,
 ) -> np.ndarray:
     """DTW-aligned forward process for a single (z_nat, z_acc) pair.
@@ -187,14 +188,13 @@ def sample_forward_dtw(
         path_arr:  [P, 2] int16 DTW warping path
         T_eng:     native speech end frame
         T_l2:      L2 speech end frame
+        eps:       [1500, D] pre-generated Gaussian noise (float32)
         sigma_max: noise schedule parameter
 
     Returns:
         z_t: [1500, D] noisy DTW-interpolated latent (float32)
     """
-    D = z_nat_np.shape[1]
-
-    N     = max(1, round((1 - t) * T_l2 + t * T_eng))
+    N      = max(1, round((1 - t) * T_l2 + t * T_eng))
     i_norm = path_arr[:, 0].astype(np.float32) / max(T_eng - 1, 1)
     j_norm = path_arr[:, 1].astype(np.float32) / max(T_l2  - 1, 1)
 
@@ -220,8 +220,7 @@ def sample_forward_dtw(
     else:
         z_clean = speech[:1500]
 
-    sigma_t = sigma_max * np.sqrt(max(t * (1 - t), 1e-5))
-    eps     = np.random.randn(1500, D).astype(np.float32)
+    sigma_t = np.float32(sigma_max * np.sqrt(max(t * (1 - t), 1e-5)))
     return z_clean + sigma_t * eps
 
 
@@ -233,46 +232,60 @@ def bridge_loss_dtw(
     nat_speech_ends: torch.Tensor,
     paths: list,
     sigma_max: float = 0.5,
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
     """Training loss for DTW-aligned x₀-prediction.
 
-    Constructs z_t via sample_forward_dtw (numpy, per-item loop since paths have
-    variable length), then passes the full [B, 1500, D] batch to the model.
-    Loss is unmasked MSE over all 1500 frames — includes silence correction.
+    z_nat and z_acc are expected as CPU tensors (bfloat16 from the DataLoader) —
+    do NOT move them to device before calling this function. The numpy computation
+    happens on CPU and only z_t + z_nat are transferred to device at the end,
+    avoiding an unnecessary D2H round-trip.
+
+    Loss is unmasked MSE over all 1500 frames (speech + silence correction).
 
     Args:
         model:           BridgeTransformer
-        z_nat:           [B, 1500, D] native encoder states
-        z_acc:           [B, 1500, D] accented encoder states
-        l2_speech_ends:  [B] L2 speech end frames
-        nat_speech_ends: [B] native speech end frames
+        z_nat:           [B, 1500, D] native encoder states (CPU, bf16)
+        z_acc:           [B, 1500, D] accented encoder states (CPU, bf16)
+        l2_speech_ends:  [B] L2 speech end frames (device)
+        nat_speech_ends: [B] native speech end frames (device)
         paths:           list[np.ndarray] of shape [P_i, 2] per item
         sigma_max:       noise schedule parameter
+        device:          target device for model forward pass
+        dtype:           target dtype (default: z_nat.dtype, i.e. bfloat16)
     """
-    B, L, D   = z_nat.shape
-    device    = z_nat.device
-    dtype     = z_nat.dtype
+    B, L, D = z_nat.shape
+    if device is None:
+        device = next(model.parameters()).device
+    if dtype is None:
+        dtype = z_nat.dtype
 
     t_vals      = np.random.rand(B).astype(np.float32)
-    z_nat_np    = z_nat.float().cpu().numpy()
-    z_acc_np    = z_acc.float().cpu().numpy()
+    # float32 cast on CPU — fast dtype conversion, no PCIe transfer
+    z_nat_np    = z_nat.float().numpy()
+    z_acc_np    = z_acc.float().numpy()
     l2_ends_np  = l2_speech_ends.cpu().numpy()
     nat_ends_np = nat_speech_ends.cpu().numpy()
+    # Generate all noise in one vectorised call rather than B separate randn calls
+    all_eps = np.random.randn(B, 1500, D).astype(np.float32)
 
-    z_t_np = np.stack([
-        sample_forward_dtw(
+    z_t_np = np.empty((B, 1500, D), dtype=np.float32)
+    for i in range(B):
+        z_t_np[i] = sample_forward_dtw(
             z_nat_np[i], z_acc_np[i],
             float(t_vals[i]),
             paths[i],
             int(nat_ends_np[i]),
             int(l2_ends_np[i]),
+            all_eps[i],
             sigma_max=sigma_max,
         )
-        for i in range(B)
-    ])
 
     z_t      = torch.from_numpy(z_t_np).to(device=device, dtype=dtype)
     t_tensor = torch.from_numpy(t_vals).to(device=device, dtype=dtype)
+    # Move z_nat to device only here — single H2D transfer for loss computation
+    z_nat_dev = z_nat.to(device=device, dtype=dtype)
 
     z_nat_pred = model(z_t, t_tensor)
-    return F.mse_loss(z_nat_pred, z_nat)
+    return F.mse_loss(z_nat_pred, z_nat_dev)
