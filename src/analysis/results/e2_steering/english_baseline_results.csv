@@ -1,63 +1,63 @@
 prompt_id,speaker,reference,prediction,wer
-arctic_a0016,BDL,theres fort churchill a rifleshot beyond the ridge asleep,theres fort churchill a rifle beyond beyond the ridge asleep,0.2222222222222222
+arctic_a0016,BDL,theres fort churchill a rifleshot beyond the ridge asleep,theres fort churchill a rifleshot beyond the ridge asleep,0.0
 arctic_a0023,BDL,a combination of canadian capital quickly organized and petitioned for the same privileges,a combination of canadian capital quickly organized and petitioned for the same privileges,0.0
 arctic_a0043,BDL,it seemed nearer to him since he had seen and talked with gregson,it seemed nearer to him since he had seen and talked with gregson,0.0
-arctic_a0073,BDL,the promoters eyes were heavy with little puffy bags under them,theoters eyes were heavy with little puffy bags under them,0.18181818181818182
-arctic_a0078,BDL,then and at supper he tried to fathom her,then and at supper he he tried to fath her,0.2222222222222222
+arctic_a0073,BDL,the promoters eyes were heavy with little puffy bags under them,the promoters eyes were heavy with little puffy bags under them,0.0
+arctic_a0078,BDL,then and at supper he tried to fathom her,then and at supper he to fathath her,0.2222222222222222
 arctic_a0086,BDL,death had come with terrible suddenness,death had come with terrible suddenness,0.0
 arctic_a0090,BDL,the singing voice approached rapidly,the singing voice approached rapidly,0.0
-arctic_a0155,BDL,wont you draw up gentlemen,wont you draw up gentlemen gentlemen,0.2
+arctic_a0155,BDL,wont you draw up gentlemen,wont you draw up gentlemen,0.0
 arctic_a0160,BDL,you want to go over and see his gang throw dirt,you want to go over and see his gang throw dirt,0.0
 arctic_a0174,BDL,they were the presage of storm,they were the presage of storm,0.0
 arctic_a0192,BDL,he did not rush in,he did not rush in,0.0
-arctic_a0204,BDL,the wolfdog thrust his gaunt muzzle toward him,the wolfdog his gaunt muzzle toward him,0.125
+arctic_a0204,BDL,the wolfdog thrust his gaunt muzzle toward him,the wolfdog thrust his gaunt muzzle toward,0.125
 arctic_a0211,BDL,it drowned all sound that brute agony and death may have made,it drowned all sound that brute agony and death may have made,0.0
 arctic_a0215,BDL,they die out of spite,they die out of spite,0.0
 arctic_a0220,BDL,a dead man is of no use on a plantation,a dead man is of no use on a plantation,0.0
 arctic_a0234,BDL,why the average review is more nauseating than cod liver oil,why the average review is more nauseating than cod liver oil,0.0
 arctic_a0271,BDL,now please give a plain statement of what occurred,now please give a plain statement of what occurred,0.0
 arctic_a0279,BDL,she said with chattering teeth,she said with chattering teeth,0.0
-arctic_a0299,BDL,i tell you i am disgusted with this adventure tomfoolery and rot,i tell you i am disgusted with this adventure tomolery and rot,0.08333333333333333
+arctic_a0299,BDL,i tell you i am disgusted with this adventure tomfoolery and rot,i tell you i am disusted with this adventure tomfoolery and rot,0.08333333333333333
 arctic_a0301,BDL,but all my dreams violated this law,but all my dreams violated this law,0.0
 arctic_a0316,BDL,we had been chased by them ourselves more than once,we had been chased by them ourselves more than once,0.0
-arctic_a0327,BDL,they were less stooped than we less springy in their movements,they were less stooped than we springy in their movements,0.09090909090909091
+arctic_a0327,BDL,they were less stooped than we less springy in their movements,they were less stooped than we less springy in their movements,0.0
 arctic_a0341,BDL,why doggone you all shake again,why doggone you all shake again,0.0
 arctic_a0342,BDL,seventeen no eighteen days ago,seventeen no eighteen days ago,0.0
 arctic_a0350,BDL,is that pat hanrahans mug looking hungry and willing,is that pat hanrahans mug looking hungry and willing,0.0
 arctic_a0361,BDL,but he did not broach it preferring to mature it carefully,but he did not broach it preferring to mature it carefully,0.0
-arctic_a0364,BDL,we have plenty of capital ourselves and yet we want more,we have plenty of capital ourselves and yet we want,0.09090909090909091
+arctic_a0364,BDL,we have plenty of capital ourselves and yet we want more,we have plenty of capital ourselves and yet we want more,0.0
 arctic_a0373,BDL,points of view new ideas life,points of view new ideas life,0.0
-arctic_a0376,BDL,your price my son is just about thirty per week,your price my son son is just about thirty per week,0.1
+arctic_a0376,BDL,your price my son is just about thirty per week,your price my my son is is about about thirty per week,0.3
 arctic_a0377,BDL,this sound did not disturb the hush and awe of the place,this sound did not disturb the hush and awe of the place,0.0
 arctic_a0389,BDL,mab she said,mab she said,0.0
-arctic_a0404,BDL,perrault found one with head buried in the grub box,perra found found with head buried in in grub box,0.3
+arctic_a0404,BDL,perrault found one with head buried in the grub box,perra found found with head buried in the grub box,0.2
 arctic_a0438,BDL,at sea monday march 16 1908,at sea monday march 16 1908,0.0
-arctic_a0439,BDL,at sea wednesday march 18 1908,at sea wednesday 18 1908,0.16666666666666666
+arctic_a0439,BDL,at sea wednesday march 18 1908,at sea wednesday march 181908,0.3333333333333333
 arctic_a0447,BDL,ah it is growing dark and darker,ah it is growing dark and darker,0.0
-arctic_a0452,BDL,three oilers and a fourth engineer was his greeting,three oilers and a fourth engineer was his gre,0.1111111111111111
-arctic_a0466,BDL,captain west may be a samurai but he is also human,captain west may be a samurai but he is also human,0.0
+arctic_a0452,BDL,three oilers and a fourth engineer was his greeting,three oilers and a fourth engineer was his greeting,0.0
+arctic_a0466,BDL,captain west may be a samurai but he is also human,captain west may be a samurai he he is also human,0.09090909090909091
 arctic_a0470,BDL,he spat it out like so much venom,he spat it out like so much venom,0.0
 arctic_a0472,BDL,he is too keenly intelligent too sharply sensitive successfully to endure,he is too keenly intelligent too sharply sensitive successfully to endure,0.0
 arctic_a0534,BDL,but johannes could and did,but johannes could and did,0.0
 arctic_a0539,BDL,i should like to engage just for one whole life in that,i should like to engage for just one whole life in that,0.16666666666666666
-arctic_a0542,BDL,without a doubt some of them have dinner engagements,without a a doubt some of them have dinner engagements,0.1111111111111111
+arctic_a0542,BDL,without a doubt some of them have dinner engagements,without a doubt some of them have dinner engagements,0.0
 arctic_a0545,BDL,the italian rancho was a bachelor establishment,the italian rancho was a bachelor establishment,0.0
-arctic_a0554,BDL,jack london waikiki beach honolulu oahu,jack london waikiki beach honolulu oahu,0.0
+arctic_a0554,BDL,jack london waikiki beach honolulu oahu,jack london waik beach beach honolulu oahu,0.3333333333333333
 arctic_a0557,BDL,the last refugee had passed,the last refugee had passed,0.0
 arctic_a0578,BDL,but well just postpone this,but well just postpone this,0.0
 arctic_a0593,BDL,shed make a good wife for the cashier,shed make a good wife for the cashier,0.0
 arctic_b0010,BDL,he turned the map to gregson pointing with his finger,he turned the map to gregson with his finger,0.1
 arctic_b0025,BDL,now you understand,now you understand,0.0
 arctic_b0026,BDL,you have associated with some of these men,you have associated with some of these men,0.0
-arctic_b0042,BDL,ten minutes had not elapsed since he had dropped the handkerchief,ten minutes had not elapsed since he had dropped the handkerchief,0.0
+arctic_b0042,BDL,ten minutes had not elapsed since he had dropped the handkerchief,ten minutes had not notapsed since he had dropped the handkerchief,0.09090909090909091
 arctic_b0047,BDL,suppose you saw me at work through the window,suppose you saw me at work through the window,0.0
-arctic_b0056,BDL,ill give a thousand if you produce her retorted gregson,ill give a thousand if you produce her ret gregsonson,0.2
+arctic_b0056,BDL,ill give a thousand if you produce her retorted gregson,ill give a thousand if you produce her retorted gregson,0.0
 arctic_b0057,BDL,they have won popular sentiment through the newspapers,they have won popular sentiment through the newspapers,0.0
 arctic_b0082,BDL,he bit his tongue and cursed himself at this fresh break,he bit his tongue and cursed himself at this fresh break,0.0
-arctic_b0109,BDL,philip ate lightly of the food which pierre had ready for him,philip took lightly of the food which pierre had ready for him,0.08333333333333333
+arctic_b0109,BDL,philip ate lightly of the food which pierre had ready for him,philip took lightly of the food which pierre pierre had for him,0.25
 arctic_b0159,BDL,his teeth shut with a last click,his teeth shut with a last click,0.0
 arctic_b0172,BDL,on the far corner of the compound fence a hawk brooded,on the the corner of the compound fence a hawk brooded,0.09090909090909091
-arctic_b0175,BDL,sheldon glanced at the thermometer,sheldononanced of the thermometer,0.6
+arctic_b0175,BDL,sheldon glanced at the thermometer,sheldon glanced of the thermometer,0.2
 arctic_b0194,BDL,joan cried with shining eyes,joan cried with shining eyes,0.0
 arctic_b0200,BDL,we leave the eventuality to time and law,we leave the eventuality to time and law,0.0
 arctic_b0217,BDL,such is my passage engaged on the steamer,such is my passage engaged on the steamer,0.0
@@ -66,11 +66,11 @@ arctic_b0265,BDL,i was not to cry out in the face of fear,i was not to cry out i
 arctic_b0267,BDL,the boy threw back his head with pride,the boy threw back his head with pride,0.0
 arctic_b0269,BDL,why not like any railroad station or ferry depot,why not like any railroad station or ferry depot,0.0
 arctic_b0284,BDL,there was one difficulty however,there was one difficulty however,0.0
-arctic_b0295,BDL,all right sir replied jock with great regret,all right right sir replied jock with great great regret,0.25
+arctic_b0295,BDL,all right sir replied jock with great regret,all right sir jock with great regret,0.125
 arctic_b0306,BDL,cameron looked at his hands with their long sinewy fingers,cameron looked at his hands with their long sinewy fingers,0.0
 arctic_b0322,BDL,their supply of grub was gone,their supply of grub was gone,0.0
 arctic_b0328,BDL,change chairs daylight commanded,change chairs daylight commanded,0.0
-arctic_b0341,BDL,i play that choice wide open to win,play play that choice wide open to win,0.125
+arctic_b0341,BDL,i play that choice wide open to win,i play that choice wide open to win,0.0
 arctic_b0352,BDL,now just what do you want to know,now just what do you want to know,0.0
 arctic_b0357,BDL,the law of club and fang,the law of club and fang,0.0
 arctic_b0363,BDL,she was built primarily to sail,she was built primarily to sail,0.0
@@ -78,24 +78,24 @@ arctic_b0367,BDL,any average young fellow can teach himself in a week,any averag
 arctic_b0372,BDL,mr mcveigh told me about him,mr mcveigh told me about him,0.0
 arctic_b0375,BDL,man could not conquer them,man could not conquer them,0.0
 arctic_b0376,BDL,thought i and a worthy fool he proved,thought i and a worthy fool he proved,0.0
-arctic_b0390,BDL,the voyage was our idea of a good time,the voyage was our idea of a good time,0.0
-arctic_b0391,BDL,at sea tuesday march 17 1908,at sea t tuesday march 17 19 o8,0.5
-arctic_b0425,BDL,there were orangegreen goldgreen and a coppergreen,there were orange gold green and a coppergreen,0.42857142857142855
+arctic_b0390,BDL,the voyage was our idea of a good time,the voyage was our idea a a good time,0.1111111111111111
+arctic_b0391,BDL,at sea tuesday march 17 1908,at sea t tuesday march 17 1908,0.16666666666666666
+arctic_b0425,BDL,there were orangegreen goldgreen and a coppergreen,there were orangegreen goldgreen and a coppergreen,0.0
 arctic_b0433,BDL,we are cooking on the coal stove and on the oil burners,we are cooking on the coal stove and on the oil burners,0.0
 arctic_b0435,BDL,well did they eat,well did they eat,0.0
 arctic_b0437,BDL,nowhere in the north is the soil so prolific,nowhere in the north is the soil so prolific,0.0
-arctic_b0446,BDL,some one had thrust a large sheathknife into his hand,some one had thrust a large sheathknife into his hand,0.0
+arctic_b0446,BDL,some one had thrust a large sheathknife into his hand,some one had thrust a large sheath knife into his hand,0.2
 arctic_b0451,BDL,you used to joyride like the very devil,you used to joyride like the very devil,0.0
 arctic_b0470,BDL,the very thing ernest agreed,the very thing agreed agreed,0.2
 arctic_b0476,BDL,the reorganization of these countries took the form of revolution,the reorganization of these countries took the form of revolution,0.0
 arctic_b0481,BDL,the task we set ourselves was threefold,the task we set ourselves was threefold,0.0
-arctic_b0487,BDL,after all superfluous flesh is gone what is left is stringy and resistant,after all superfluous flesh is gone what is left is stringy and resistant,0.0
+arctic_b0487,BDL,after all superfluous flesh is gone what is left is stringy and resistant,after all superfluous flesh is gone gone is left is stringy and resistant,0.07692307692307693
 arctic_b0491,BDL,jacob brinker who was his roadmate brought the news,jacob brinker who was his roadmate brought the news,0.0
 arctic_b0499,BDL,i said and dismissed the matter as not worth thinking about,i said and dismissed the matter is not worth thinking about,0.09090909090909091
-arctic_b0504,BDL,the life there was healthful and athletic but too juvenile,the life was healthful and athletic but too juvenile,0.1
+arctic_b0504,BDL,the life there was healthful and athletic but too juvenile,the life there was health and athletic but too juvenile,0.1
 arctic_b0507,BDL,did i possess too much vitality,did i possess too much vitality,0.0
 arctic_b0518,BDL,but there was also talk of witchcraft in the village,but there was also talk of witchcraft in the village,0.0
 arctic_b0519,BDL,yea i will tell thee,yea i will tell thee,0.0
 arctic_b0527,BDL,the very idea of it was preposterous,the very idea of it was preposterous,0.0
 arctic_b0533,BDL,his abnormal power of vision made abstractions take on concrete form,his abnormal power of vision made abstractions take on concrete form,0.0
-arctic_b0534,BDL,ill tell you the librarian said with a brightening face,ill tell you the librarian said with a brightening face,0.0
+arctic_b0534,BDL,ill tell you the librarian said with a brightening face,ill tell you the the librarian said with a brightening face,0.1
