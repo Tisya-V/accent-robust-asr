@@ -32,6 +32,8 @@ export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
 export XDG_CACHE_HOME="${HOME_CACHE}"
 export MPLCONFIGDIR="${HOME_CACHE}/matplotlib"
 export NLTK_DATA="${PROJECT_ROOT}/nltk_data"
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1
 
 # ============================================================================
 # CUDA (SLURM cluster style, no module system)

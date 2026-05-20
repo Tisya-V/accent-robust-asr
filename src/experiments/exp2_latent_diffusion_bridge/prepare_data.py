@@ -248,12 +248,17 @@ def build_eval_set(
 
     # L2 test speakers
     for l2_utt in tqdm(l2_test_utterances, desc="Building eval set (L2 test)"):
+        try:
+            speech_end_frame = compute_speech_end_frame(l2_utt["wav_path"])
+        except Exception:
+            speech_end_frame = None
         eval_pairs.append({
             "speaker": l2_utt["speaker"],
             "utterance_id": l2_utt["utterance_id"],
             "text": l2_utt.get("text", ""),
             "l1": l2_utt.get("l1", "Unknown"),
             "eval_type": "l2_test",
+            "speech_end_frame": speech_end_frame,
         })
 
     # CMU test speakers (native sanity check)
@@ -279,6 +284,7 @@ def prepare_data(
     train_data_dir: str = "data/processed/train",
     dev_data_dir: str = "data/processed/dev",
     test_data_dir: str = "data/processed/test",
+    test_only: bool = False,
 ):
     """Main entry point for data preparation."""
     output_dir = Path(output_dir)
@@ -298,63 +304,52 @@ def prepare_data(
     for split, path in sorted(data_dirs.items()):
         print(f"  {split}: {path}")
 
-    # Load utterances
     print(f"\n[Loading Utterances]")
-    l2_train, l2_dev = load_train_dev_utterances()
     l2_test = load_test_utterances()
-    print(f"  L2 train: {len(l2_train)} utterances")
-    print(f"  L2 dev: {len(l2_dev)} utterances")
     print(f"  L2 test: {len(l2_test)} utterances")
 
-    # Extract CMU train speakers (CMU speakers that are not in test set)
+    cmu_test_speakers = CMU_SPEAKERS & TEST_SPEAKERS
+    cmu_test_utterances = _load_cmu_arctic_utterances(speakers=cmu_test_speakers) if cmu_test_speakers else []
+    if cmu_test_utterances:
+        print(f"  CMU test speakers {sorted(cmu_test_speakers)}: {len(cmu_test_utterances)} utterances")
+
+    test_pairs = build_eval_set(l2_test, cmu_test_utterances)
+    test_mapping_path = output_dir / "mapping_test.json"
+    with open(test_mapping_path, "w") as f:
+        json.dump(test_pairs, f, indent=2)
+    print(f"[Saved] {test_mapping_path}")
+
+    if test_only:
+        print(f"\n[✅ Test mapping updated]")
+        return
+
+    l2_train, l2_dev = load_train_dev_utterances()
+    print(f"  L2 train: {len(l2_train)} utterances")
+    print(f"  L2 dev: {len(l2_dev)} utterances")
+
     cmu_train_speakers = CMU_SPEAKERS - TEST_SPEAKERS
     cmu_utterances = [u for u in l2_train + l2_dev if u["speaker"] in cmu_train_speakers]
     cmu_prompt_map = build_prompt_to_utterances(cmu_utterances)
     print(f"  CMU train speakers: {sorted(cmu_train_speakers)}")
     print(f"    {len(cmu_utterances)} utterances across {len(cmu_prompt_map)} prompts")
 
-    # Load CMU test speakers (native sanity check for eval)
-    cmu_test_speakers = CMU_SPEAKERS & TEST_SPEAKERS
-    if cmu_test_speakers:
-        cmu_test_utterances = _load_cmu_arctic_utterances(speakers=cmu_test_speakers)
-        print(f"  CMU test speakers {sorted(cmu_test_speakers)}: {len(cmu_test_utterances)} utterances")
-    else:
-        cmu_test_utterances = []
-        print(f"  No CMU test speakers found")
-
-    # Build training pairs
-    print(f"\n[Building Training Pairs]")
-    # Filter out CMU speakers from L2 set (keep only true L2 speakers)
     l2_combined = [u for u in l2_train + l2_dev if u["speaker"] not in cmu_train_speakers]
     print(f"  L2 utterances (after filtering CMU): {len(l2_combined)}")
     pairs = build_training_pairs(l2_combined, cmu_train_speakers, cmu_prompt_map, data_dirs)
-
-    # Stratified split
     pairs = stratified_split(pairs, train_ratio=0.85)
 
-    # Save training mappings
-    train_mapping_path = output_dir / "mapping_train.json"
-    dev_mapping_path = output_dir / "mapping_dev.json"
-
     train_pairs = [p for p in pairs if p["bridge_split"] == "train"]
-    dev_pairs = [p for p in pairs if p["bridge_split"] == "val"]
+    dev_pairs   = [p for p in pairs if p["bridge_split"] == "val"]
 
+    train_mapping_path = output_dir / "mapping_train.json"
+    dev_mapping_path   = output_dir / "mapping_dev.json"
     with open(train_mapping_path, "w") as f:
         json.dump(train_pairs, f, indent=2)
     with open(dev_mapping_path, "w") as f:
         json.dump(dev_pairs, f, indent=2)
 
-    print(f"\n[Saved]")
-    print(f"  {train_mapping_path}")
-    print(f"  {dev_mapping_path}")
-
-    # Build and save eval set
-    test_pairs = build_eval_set(l2_test, cmu_test_utterances)
-    test_mapping_path = output_dir / "mapping_test.json"
-    with open(test_mapping_path, "w") as f:
-        json.dump(test_pairs, f, indent=2)
-    print(f"  {test_mapping_path}")
-
+    print(f"[Saved] {train_mapping_path}")
+    print(f"[Saved] {dev_mapping_path}")
     print(f"\n[✅ Data preparation complete]")
 
 
@@ -387,6 +382,8 @@ if __name__ == "__main__":
         help="Directory containing test encoder states",
     )
 
+    parser.add_argument("--test_only", action="store_true",
+                        help="Only regenerate mapping_test.json (preserves train/dev mappings)")
     args = parser.parse_args()
 
     prepare_data(
@@ -394,4 +391,5 @@ if __name__ == "__main__":
         train_data_dir=args.train_data_dir,
         dev_data_dir=args.dev_data_dir,
         test_data_dir=args.test_data_dir,
+        test_only=args.test_only,
     )
