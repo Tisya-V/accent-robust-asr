@@ -148,7 +148,7 @@ def main():
     parser.add_argument("--workers",       type=int, default=8)
     args = parser.parse_args()
 
-    project_root = Path(__file__).resolve().parents[4]
+    project_root = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(project_root))
 
     mapping_paths = [project_root / args.mapping_train, project_root / args.mapping_dev]
