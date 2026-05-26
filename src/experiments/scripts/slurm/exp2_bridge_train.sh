@@ -1,60 +1,78 @@
 #!/bin/bash
-#SBATCH --job-name=exp2_bridge_train
+#SBATCH --job-name=exp2_bridge_train_pos_e
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=60GB
-#SBATCH --time=06:00:00
-#SBATCH --output=logs/exp2_bridge_train_%j.out
-#SBATCH --error=logs/exp2_bridge_train_%j.out
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=8:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.out
+#SBATCH --requeue
 
-# Train E2 Latent Diffusion Bridge model on SLURM
-#
-# Usage on SLURM cluster:
-# 1. chmod +x src/experiments/scripts/slurm/exp2_bridge_train.sh
-# 2. sbatch src/experiments/scripts/slurm/exp2_bridge_train.sh
+# set -e
+
+# source scripts/slurm_env.sh
+# cd "${PROJECT_ROOT}"
+
+# RUNTIME_LOG="logs/%x_%j.log"
+# mkdir -p logs
+# exec > >(tee -a "$RUNTIME_LOG") 2>&1
+
+# echo "=========================================="
+# echo "E2 Bridge Training — DTW"
+# echo "Job:  ${SLURM_JOB_ID}"
+# echo "GPU:  $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
+# echo "Log:  ${RUNTIME_LOG}"
+# echo "=========================================="
+
+# echo "DTW alignment..."
+# python -m src.experiments.exp2_latent_diffusion_bridge.train \
+#     --alignment    dtw \
+#     --out_dir      models/bridge_dtw \
+#     --n_epochs     50 \
+#     --batch_size   64 \
+#     --lr           1e-4 \
+#     --weight_decay 1e-4 \
+#     --sigma_max    1.5 \
+#     --num_workers  6 \
+#     --patience     10 \
+#     --notes        "x0-prediction, DTW alignment (interpolated tail)"
+
+# echo "Done at $(date)"
+
+
+
+# ===================================================================================
+
+
 
 set -e
 
-# Source centralized environment configuration
 source scripts/slurm_env.sh
-
 cd "${PROJECT_ROOT}"
 
+RUNTIME_LOG="logs/%x_%j.log"
+mkdir -p logs
+exec > >(tee -a "$RUNTIME_LOG") 2>&1
+
 echo "=========================================="
-echo "E2 Latent Diffusion Bridge Training Job"
-echo "Real-time log: $RUNTIME_LOG"
-echo "Track with: tail -f $RUNTIME_LOG"
+echo "E2 Bridge Training — position"
+echo "Job:  ${SLURM_JOB_ID}"
+echo "GPU:  $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
+echo "Log:  ${RUNTIME_LOG}"
 echo "=========================================="
-echo ""
 
-echo "Checking GPU setup..."
-nvidia-smi
-echo "SLURM_JOB_ID=$SLURM_JOB_ID"
-echo "SLURM_GPUS=$SLURM_GPUS"
-echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-python - <<'PY'
-import os, torch
-print("DEBUG CUDA_VISIBLE_DEVICES =", os.environ.get("CUDA_VISIBLE_DEVICES"))
-print("DEBUG torch.cuda.is_available =", torch.cuda.is_available())
-print("DEBUG torch.cuda.device_count =", torch.cuda.device_count())
-for i in range(torch.cuda.device_count()):
-    print(f"DEBUG cuda[{i}] =", torch.cuda.get_device_name(i))
-PY
-
-echo -e "\n\n==============================\n\n"
-echo "Starting Bridge Training..."
-
+echo "Position alignment..."
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
-    --mapping_train_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_train.json \
-    --mapping_val_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json \
-    --out_dir models/bridge \
-    --n_epochs 50 \
-    --batch_size 64 \
-    --lr 1e-3 \
+    --alignment    position \
+    --out_dir      models/bridge_position_e \
+    --n_epochs     50 \
+    --batch_size   64 \
+    --lr           1e-4 \
     --weight_decay 1e-4 \
-    --sigma_max 0.5 \
-    --num_workers 10 
-    # --profile
-    
-echo "✅ Bridge training complete."
+    --sigma_max    1.5 \
+    --num_workers  6 \
+    --patience     10 \
+    --notes        "e-prediction, position alignment (interpolated tail)"
+
+echo "Done at $(date)"

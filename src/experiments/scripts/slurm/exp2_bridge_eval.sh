@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=exp2_bridge_eval
-#SBATCH --partition=gpu
+#SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/exp2_bridge_eval_%j.out
-#SBATCH --error=logs/exp2_bridge_eval_%j.err
+#SBATCH --error=logs/exp2_bridge_eval_%j.out
 
 # Evaluate E2 Latent Diffusion Bridge model on SLURM
 #
@@ -20,12 +20,6 @@ set -e
 source scripts/slurm_env.sh
 
 cd "${PROJECT_ROOT}"
-
-# Create real-time log file
-RUNTIME_LOG="logs/exp2_bridge_eval_runtime_${SLURM_JOB_ID}.log"
-mkdir -p logs
-exec > >(tee -a "$RUNTIME_LOG")
-exec 2>&1
 
 echo "=========================================="
 echo "E2 Latent Diffusion Bridge Evaluation Job"
@@ -52,9 +46,10 @@ echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
 python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-    --bridge_ckpt models/bridge/checkpoint_best.pt \
-    --decoder whisper \
+    --bridge_ckpt models/bridge_dtw_x0_l2pad_cond/checkpoint_best.pt \
     --output_dir results/bridge_eval \
+    --output_file bridge_dtw_x0_l2pad_cond.csv \
+    --max_utts_per_speaker 50 \
     --n_steps 20
 
 echo "✅ Bridge evaluation complete."

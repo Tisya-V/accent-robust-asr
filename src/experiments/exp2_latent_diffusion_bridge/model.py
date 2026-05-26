@@ -4,6 +4,7 @@ Maps [B, 1500, 768] encoder states with timestep conditioning.
 """
 
 import math
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -153,10 +154,12 @@ class BridgeTransformer(nn.Module):
     """
     Lightweight bidirectional Transformer for latent diffusion bridge.
 
-    Input: [B, 1500, 768] (accented encoder latents) + timestep t
-    Output: [B, 1500, 768] (predicted noise for diffusion)
+    Input: [B, 1500, 768] noisy latent + timestep t
+    Output: [B, 1500, 768] predicted noise (ε-prediction)
 
-    Projects 768-dim input to d_model for processing, then back to 768-dim.
+    With cond_acc=True (I²SB cond_acc): z_acc is concatenated to z_t along the
+    feature dimension before proj_in, giving the model a fixed anchor to the
+    source accent throughout the denoising trajectory.
     """
 
     def __init__(
@@ -164,17 +167,22 @@ class BridgeTransformer(nn.Module):
         d_model: int = 256,
         n_layers: int = 4,
         n_heads: int = 8,
-        dim_feedforward: int = 2048,
+        dim_feedforward: int = 1024,
         dropout: float = 0.1,
         latent_dim: int = 768,
+        cond_acc: bool = False,
+        parameterization: str = "eps",
     ):
         super().__init__()
         self.d_model = d_model
         self.n_layers = n_layers
         self.latent_dim = latent_dim
+        self.cond_acc = cond_acc
+        self.parameterization = parameterization
 
-        # Input projection: latent_dim (768) -> d_model
-        self.proj_in = nn.Linear(latent_dim, d_model) if d_model != latent_dim else nn.Identity()
+        # Input projection: (latent_dim * 2 if cond_acc else latent_dim) -> d_model
+        in_dim = latent_dim * 2 if cond_acc else latent_dim
+        self.proj_in = nn.Linear(in_dim, d_model)
 
         # Timestep embedding
         self.time_embedding = TimestepEmbedding(d_model)
@@ -188,42 +196,41 @@ class BridgeTransformer(nn.Module):
         # Final layer norm
         self.norm_final = nn.LayerNorm(d_model)
 
-        # Output projection: d_model -> latent_dim (768)
-        self.proj_out = nn.Linear(d_model, latent_dim) if d_model != latent_dim else nn.Identity()
+        # Output projection: d_model -> latent_dim
+        self.proj_out = nn.Linear(d_model, latent_dim)
 
-        # Zero-initialize proj_out: at init, model predicts zero noise
-        # This ensures initial loss is exactly the variance of the target (clean baseline)
-        if d_model != latent_dim:
-            nn.init.zeros_(self.proj_out.weight)
-            nn.init.zeros_(self.proj_out.bias)
+        # Zero-initialize output projection for both parameterizations.
+        # eps: eps_pred=0 → z_nat_hat=z_t → identity at init.
+        # x0: proj_out=0 + z_t residual (see forward) → z_nat_hat=z_t → identity at init.
+        nn.init.zeros_(self.proj_out.weight)
+        nn.init.zeros_(self.proj_out.bias)
 
-    def forward(self, z_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, z_t: torch.Tensor, t: torch.Tensor,
+                z_acc: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Forward pass: predict noise for diffusion.
-
         Args:
-            z_t: [B, 1500, 768] noisy encoder latents at timestep t
-            t: [B] timesteps in [0, 1]
+            z_t:   [B, L, 768] noisy latent at timestep t
+            t:     [B] timesteps in [0, 1]
+            z_acc: [B, L, 768] accented encoder states — required if cond_acc=True,
+                   ignored otherwise (I²SB cond_acc)
 
         Returns:
-            eps_pred: [B, 1500, 768] predicted noise (same shape as input)
+            eps_pred: [B, L, 768] predicted noise
         """
-        B, L, D = z_t.shape
+        if self.cond_acc:
+            assert z_acc is not None, "z_acc required when cond_acc=True"
+            x = torch.cat([z_t, z_acc.to(z_t.dtype)], dim=-1)  # [B, L, 1536]
+        else:
+            x = z_t  # [B, L, 768]
 
-        # Project input to d_model
-        x = self.proj_in(z_t)  # [B, L, d_model]
+        x = self.proj_in(x)              # [B, L, d_model]
+        t_emb = self.time_embedding(t)   # [B, d_model]
 
-        # Embed timestep
-        t_emb = self.time_embedding(t)  # [B, d_model]
-
-        # Pass through AdaLN blocks
         for block in self.blocks:
             x = block(x, t_emb)
 
-        # Final norm
         x = self.norm_final(x)
-
-        # Project back to latent_dim
-        eps_pred = self.proj_out(x)  # [B, L, 768]
-
-        return eps_pred
+        out = self.proj_out(x)           # [B, L, 768]
+        if self.parameterization == "x0":
+            out = out + z_t              # residual: predict correction on z_t, not absolute z_nat
+        return out

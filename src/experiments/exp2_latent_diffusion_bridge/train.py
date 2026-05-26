@@ -38,14 +38,19 @@ def collate_fn(batch):
 
 
 def collate_fn_dtw(batch):
-    """Stack tensors and collect DTW paths as a list (variable-length, cannot stack)."""
+    """Stack tensors and pad DTW paths to [B, max_P, 2] for batched GPU ops."""
     z_accs, z_nats, l2_ends, nat_ends, paths = zip(*batch)
+    max_P  = max(len(p) for p in paths)
+    padded = np.zeros((len(paths), max_P, 2), dtype=np.int16)
+    for i, p in enumerate(paths):
+        padded[i, :len(p)] = p
+        padded[i, len(p):] = p[-1]  # repeat last path point — keeps t_k monotone for searchsorted
     return (
-        torch.stack(z_accs),        # [B, 1500, 768]
-        torch.stack(z_nats),        # [B, 1500, 768]
-        torch.tensor(l2_ends),      # [B]
-        torch.tensor(nat_ends),     # [B]
-        list(paths),                # list[np.ndarray], variable P per item
+        torch.stack(z_accs),            # [B, 1500, 768]
+        torch.stack(z_nats),            # [B, 1500, 768]
+        torch.tensor(l2_ends),          # [B]
+        torch.tensor(nat_ends),         # [B]
+        torch.from_numpy(padded),       # [B, max_P, 2] int16
     )
 
 
@@ -104,14 +109,17 @@ def save_config(config_path: Path, **kwargs):
     print(f"[Config] Saved: {config_path}")
 
 
-def save_history(history_path: Path, train_losses: list, val_losses: list, cosine_sims: dict = None):
+def save_history(history_path: Path, train_losses: list, val_losses: list,
+                 train_speech_losses: list = None, train_tail_losses: list = None,
+                 val_speech_losses: list = None, val_tail_losses: list = None,
+                 cosine_sims: dict = None):
     """Save training history to JSON."""
-    history = {
-        "train_losses": train_losses,
-        "val_losses": val_losses,
-    }
-    if cosine_sims:
-        history["cosine_similarities"] = cosine_sims
+    history = {"train_losses": train_losses, "val_losses": val_losses}
+    if train_speech_losses: history["train_speech_losses"] = train_speech_losses
+    if train_tail_losses:   history["train_tail_losses"]   = train_tail_losses
+    if val_speech_losses:   history["val_speech_losses"]   = val_speech_losses
+    if val_tail_losses:     history["val_tail_losses"]     = val_tail_losses
+    if cosine_sims:         history["cosine_similarities"] = cosine_sims
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
@@ -135,22 +143,35 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
     plt.close()
 
 
-def _compute_loss(model, batch, device, sigma_max, alignment):
-    """Dispatch to position or DTW loss based on alignment."""
-    if alignment == "dtw":
-        z_acc, z_nat, l2_speech_end, nat_speech_end, paths = batch
-        # z_nat and z_acc intentionally kept on CPU — bridge_loss_dtw uses them
-        # for numpy computation and handles device placement internally
+_DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english"}
+_POS_TAIL_MAP = {"position": "full", "position_fixed": "fixed"}
+
+
+def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
+                  tail_weight=0.3):
+    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, tail_loss)."""
+    if alignment.startswith("dtw"):
+        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor = batch
+        z_acc          = z_acc.to(device, non_blocking=True)
+        z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
+        path_tensor    = path_tensor.to(device, non_blocking=True)
+        dtw_tail       = _DTW_TAIL_MAP.get(alignment, "l2")
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
-                               paths, sigma_max=sigma_max, device=device)
+                               path_tensor, sigma_max=sigma_max,
+                               parameterization=parameterization, dtw_tail=dtw_tail,
+                               tail_weight=tail_weight)
     else:
         z_acc, z_nat, l2_speech_end, nat_speech_end = batch
-        z_acc         = z_acc.to(device, non_blocking=True)
-        z_nat         = z_nat.to(device, non_blocking=True)
-        l2_speech_end = l2_speech_end.to(device, non_blocking=True)
-        return bridge_loss(model, z_nat, z_acc, l2_speech_end, sigma_max=sigma_max)
+        z_acc          = z_acc.to(device, non_blocking=True)
+        z_nat          = z_nat.to(device, non_blocking=True)
+        l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
+        nat_speech_end = nat_speech_end.to(device, non_blocking=True)
+        pos_tail       = _POS_TAIL_MAP.get(alignment, "fixed")
+        return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
+                           sigma_max=sigma_max, parameterization=parameterization,
+                           pos_tail=pos_tail, tail_weight=tail_weight)
 
 
 def train_epoch(
@@ -160,10 +181,12 @@ def train_epoch(
     device: torch.device,
     sigma_max: float = 0.5,
     alignment: str = "position",
-) -> float:
-    """Train for one epoch. Returns average loss."""
+    parameterization: str = "eps",
+    tail_weight: float = 0.3,
+) -> tuple[float, float, float]:
+    """Train for one epoch. Returns (avg_total, avg_speech, avg_tail)."""
     model.train()
-    total_loss = 0.0
+    total_loss = speech_loss_sum = tail_loss_sum = 0.0
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
@@ -171,18 +194,21 @@ def train_epoch(
         optimizer.zero_grad()
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss = _compute_loss(model, batch, device, sigma_max, alignment)
+            loss, sp_loss, tl_loss = _compute_loss(
+                model, batch, device, sigma_max, alignment, parameterization, tail_weight)
 
         loss.backward()
         clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        total_loss += loss.item()
+        total_loss    += loss.item()
+        speech_loss_sum += sp_loss
+        tail_loss_sum   += tl_loss
         num_batches += 1
-        pbar.set_postfix({"loss": f"{loss.item():.6f}"})
+        pbar.set_postfix({"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}", "tl": f"{tl_loss:.4f}"})
 
     pbar.close()
-    return total_loss / num_batches
+    return total_loss / num_batches, speech_loss_sum / num_batches, tail_loss_sum / num_batches
 
 
 def train_epoch_profile(
@@ -215,9 +241,10 @@ def train_epoch_profile(
         # Time data loading
         t_load_start = time.time()
         try:
-            z_acc, z_nat, l2_speech_end, nat_speech_end = next(iterator)
+            batch = next(iterator)
         except StopIteration:
             break
+        z_acc, z_nat, l2_speech_end = batch[0], batch[1], batch[2]
         time_load += time.time() - t_load_start
 
         t_todevice_start = time.time()
@@ -235,7 +262,7 @@ def train_epoch_profile(
         # Forward pass with bf16 autocast
         t_fwd_start = time.time()
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss = bridge_loss(model, z_nat, z_acc, l2_speech_end, sigma_max=sigma_max)
+            loss = bridge_loss(model, z_nat, z_acc, None, sigma_max=sigma_max)
         torch.cuda.synchronize() if device.type == "cuda" else None
         time_fwd += time.time() - t_fwd_start
 
@@ -290,22 +317,27 @@ def val_epoch(
     device: torch.device,
     sigma_max: float = 0.5,
     alignment: str = "position",
-) -> float:
-    """Validate for one epoch. Returns average loss."""
+    parameterization: str = "eps",
+    tail_weight: float = 0.3,
+) -> tuple[float, float, float]:
+    """Validate for one epoch. Returns (avg_total, avg_speech, avg_tail)."""
     model.eval()
-    total_loss = 0.0
+    total_loss = speech_loss_sum = tail_loss_sum = 0.0
     num_batches = 0
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
         for batch in pbar:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = _compute_loss(model, batch, device, sigma_max, alignment)
-            total_loss += loss.item()
+                loss, sp_loss, tl_loss = _compute_loss(
+                    model, batch, device, sigma_max, alignment, parameterization, tail_weight)
+            total_loss    += loss.item()
+            speech_loss_sum += sp_loss
+            tail_loss_sum   += tl_loss
             num_batches += 1
-            pbar.set_postfix({"loss": f"{loss.item():.6f}"})
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}", "tl": f"{tl_loss:.4f}"})
 
-    return total_loss / num_batches
+    return total_loss / num_batches, speech_loss_sum / num_batches, tail_loss_sum / num_batches
 
 
 def train(
@@ -318,12 +350,19 @@ def train(
     batch_size: int = 32,
     lr: float = 1e-4,
     weight_decay: float = 1e-4,
-    sigma_max: float = 0.5,
+    sigma_max: float = 2.0,
+    cond_acc: bool = False,
+    parameterization: str = "eps",
+    d_model: int = 256,
+    n_layers: int = 4,
+    n_heads: int = 8,
+    dim_feedforward: int = 1024,
     num_workers: int = 4,
     profile: bool = False,
     notes: str = "",
     patience: int = 5,
     seed: int = 42,
+    tail_weight: float = 0.3,
 ):
     """
     Train the bridge model.
@@ -371,7 +410,7 @@ def train(
         np.random.seed(worker_seed)
         torch.manual_seed(worker_seed)
 
-    _collate = collate_fn_dtw if alignment == "dtw" else collate_fn
+    _collate = collate_fn_dtw if alignment.startswith("dtw") else collate_fn
 
     train_loader = DataLoader(
         train_dataset,
@@ -400,7 +439,9 @@ def train(
 
     # Model
     print(f"[Train] Initializing BridgeTransformer")
-    model = BridgeTransformer(d_model=256, n_layers=4, n_heads=8, dim_feedforward=1024)
+    model = BridgeTransformer(d_model=d_model, n_layers=n_layers, n_heads=n_heads,
+                              dim_feedforward=dim_feedforward,
+                              cond_acc=cond_acc, parameterization=parameterization)
     model = model.to(device=device, dtype=torch.bfloat16)
     
 
@@ -436,40 +477,41 @@ def train(
         "lr": lr,
         "weight_decay": weight_decay,
         "sigma_max": sigma_max,
+        "cond_acc": cond_acc,
+        "parameterization": parameterization,
         "num_workers": num_workers,
         "model": "BridgeTransformer",
-        "d_model": 256,
-        "n_layers": 4,
-        "n_heads": 8,
-        "dim_feedforward": 1024,
+        "d_model": d_model,
+        "n_layers": n_layers,
+        "n_heads": n_heads,
+        "dim_feedforward": dim_feedforward,
         "patience": patience,
         "seed": seed,
         "notes": notes,
+        "tail_weight": tail_weight,
     }
     save_config(out_dir / "config.json", **config)
 
     # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
-    z_acc_sample          = None
-    z_nat_sample          = None
-    l2_speech_end_sample  = None
-    for z_acc, z_nat, l2_speech_end, nat_speech_end in train_loader:
-        z_acc_sample         = z_acc[:4].to(device, non_blocking=True)
-        z_nat_sample         = z_nat[:4].to(device, non_blocking=True)
-        l2_speech_end_sample = l2_speech_end[:4].to(device, non_blocking=True)
-        break
+    # Use generic indexing — batch is 4-tuple (position) or 5-tuple (dtw)
+    sample_batch = next(iter(train_loader))
+    z_acc_sample         = sample_batch[0][:32].to(device, non_blocking=True)
+    z_nat_sample         = sample_batch[1][:32].to(device, non_blocking=True)
+    nat_speech_end_sample = sample_batch[3][:32].to(device, non_blocking=True)
 
     # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
+    # Mask to T_nat (not T_l2): consistent with steering notebook cos_sim_speech(., ., eng_end).
     baseline_sim = None
     if z_acc_sample is not None:
-        mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < l2_speech_end_sample.unsqueeze(1)
+        mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < nat_speech_end_sample.unsqueeze(1)
         sim_per = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
         baseline_sim = sim_per.mean().item()
         print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
 
     # Training loop with loss history
-    train_losses = []
-    val_losses = []
-    cosine_sims = {}  # Track cosine similarities: {epoch: value}
+    train_losses = []; train_speech_losses = []; train_tail_losses = []
+    val_losses   = []; val_speech_losses   = []; val_tail_losses   = []
+    cosine_sims = {}
     epochs_no_improve = 0
     print(f"[Train] Starting training for {n_epochs} epochs (patience={patience})")
     for epoch in range(start_epoch, n_epochs):
@@ -480,27 +522,49 @@ def train(
             train_loss = train_epoch_profile(model, train_loader, optimizer, device, sigma_max=sigma_max)
             break  # Profile only runs once
         else:
-            train_loss = train_epoch(model, train_loader, optimizer, device,
-                                     sigma_max=sigma_max, alignment=alignment)
-        print(f"  Train loss: {train_loss:.6f}")
-        train_losses.append(train_loss)
+            train_loss, tr_sp, tr_tl = train_epoch(
+                model, train_loader, optimizer, device,
+                sigma_max=sigma_max, alignment=alignment,
+                parameterization=parameterization, tail_weight=tail_weight)
+        print(f"  Train loss: {train_loss:.6f}  (speech={tr_sp:.6f}  tail={tr_tl:.6f})")
+        train_losses.append(train_loss); train_speech_losses.append(tr_sp); train_tail_losses.append(tr_tl)
 
         # Validate
-        val_loss = val_epoch(model, val_loader, device, sigma_max=sigma_max, alignment=alignment)
-        print(f"  Val loss:   {val_loss:.6f}")
-        val_losses.append(val_loss)
+        val_loss, val_sp, val_tl = val_epoch(
+            model, val_loader, device, sigma_max=sigma_max, alignment=alignment,
+            parameterization=parameterization, tail_weight=tail_weight)
+        print(f"  Val loss:   {val_loss:.6f}  (speech={val_sp:.6f}  tail={val_tl:.6f})")
+        val_losses.append(val_loss); val_speech_losses.append(val_sp); val_tail_losses.append(val_tl)
 
-        # Sanity check: every 5 epochs, measure cosine similarity of denoised latents
-        if (epoch + 1) % 5 == 0 and z_acc_sample is not None:
+        # Sanity check: cosine sim + prediction scale on fixed sample mini-batch
+        if z_acc_sample is not None:
             from .diffusion import bridge_inference
             with torch.no_grad():
-                z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max)
-                mask = torch.arange(z_hat.shape[1], device=device).unsqueeze(0) < l2_speech_end_sample.unsqueeze(1)
-                sim_per = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
+                z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max,
+                                         parameterization=parameterization)
+                L = z_hat.shape[1]
+                sp_mask = (torch.arange(L, device=device).unsqueeze(0)
+                           < nat_speech_end_sample.unsqueeze(1))  # [B, L]
+
+                # Cosine sim (speech frames, z_hat vs z_nat)
+                sim_per = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * sp_mask).sum(1) \
+                          / sp_mask.sum(1).float()
                 sim = sim_per.mean().item()
                 cosine_sims[str(epoch + 1)] = sim
                 baseline_str = f" (baseline: {baseline_sim:.4f})" if baseline_sim is not None else ""
-                print(f"  Cosine sim (z_hat vs z_nat, speech frames only): {sim:.4f}{baseline_str}")
+                print(f"  Cosine sim (speech, z_hat vs z_nat): {sim:.4f}{baseline_str}")
+
+                # Scale check: mean per-frame L2 norm, speech and tail separately
+                def _mean_norm(z, mask):
+                    return (z.norm(dim=-1) * mask).sum(1).div(mask.sum(1).float()).mean().item()
+
+                tl_mask = ~sp_mask
+                print(f"  Scale speech — z_acc:{_mean_norm(z_acc_sample, sp_mask):.3f}"
+                      f"  z_nat:{_mean_norm(z_nat_sample, sp_mask):.3f}"
+                      f"  z_hat:{_mean_norm(z_hat, sp_mask):.3f}")
+                print(f"  Scale tail   — z_acc:{_mean_norm(z_acc_sample, tl_mask):.3f}"
+                      f"  z_nat:{_mean_norm(z_nat_sample, tl_mask):.3f}"
+                      f"  z_hat:{_mean_norm(z_hat, tl_mask):.3f}")
 
         # Scheduler step
         scheduler.step()
@@ -523,7 +587,10 @@ def train(
                 break
 
     # Save training history and plot
-    save_history(out_dir / "history.json", train_losses, val_losses, cosine_sims=cosine_sims if cosine_sims else None)
+    save_history(out_dir / "history.json", train_losses, val_losses,
+                 train_speech_losses=train_speech_losses, train_tail_losses=train_tail_losses,
+                 val_speech_losses=val_speech_losses, val_tail_losses=val_tail_losses,
+                 cosine_sims=cosine_sims if cosine_sims else None)
     plot_losses(out_dir / "losses.png", train_losses, val_losses)
 
     print(f"\n[Train] Complete. Best val loss: {best_val_loss:.6f}")
@@ -554,19 +621,33 @@ if __name__ == "__main__":
         "--alignment",
         type=str,
         default="position",
-        choices=["position", "dtw"],
-        help="Forward process alignment: position (frame-by-frame) or dtw (alpha-timeline)",
+        choices=["position", "position_fixed", "dtw", "dtw_l2pad", "dtw_engpad"],
+        help="Forward process alignment: position (full interp), position_fixed (fixed L2 tail), dtw (L2 tail), dtw_l2pad (L2 silence tail), dtw_engpad (English silence tail)",
+    )
+    parser.add_argument(
+        "--dtw_cache",
+        type=str,
+        default="src/experiments/exp2_latent_diffusion_bridge/dtw_cache/dtw_paths.pkl",
+        help="Path to precomputed DTW paths pickle (only used with --alignment dtw)",
     )
     parser.add_argument("--n_epochs", type=int, default=50, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
-    parser.add_argument("--sigma_max", type=float, default=0.5, help="Noise schedule parameter")
+    parser.add_argument("--sigma_max", type=float, default=2.0, help="Bridge noise scale — set to per-element std of (z_acc - z_nat)")
+    parser.add_argument("--cond_acc", action="store_true", default=False, help="Condition on z_acc (I²SB cond_acc): concatenate z_acc to z_t before proj_in")
+    parser.add_argument("--parameterization", type=str, default="eps", choices=["eps", "x0"],
+                        help="Model parameterization: eps (epsilon-prediction) or x0 (direct z_nat prediction)")
+    parser.add_argument("--d_model", type=int, default=256, help="Transformer hidden dim")
+    parser.add_argument("--n_layers", type=int, default=4, help="Number of transformer layers")
+    parser.add_argument("--n_heads", type=int, default=8, help="Number of attention heads")
+    parser.add_argument("--dim_feedforward", type=int, default=1024, help="FFN hidden dim")
     parser.add_argument("--num_workers", type=int, default=4, help="DataLoader workers")
     parser.add_argument("--profile", action="store_true", help="Profile first 20 batches and exit")
     parser.add_argument("--notes", type=str, default="", help="Free-text note saved to config.json")
     parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (epochs without val loss improvement)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--tail_weight", type=float, default=0.3, help="Loss weight for tail frames [T_nat:] relative to speech frames [0:T_nat] (1.0 = equal)")
 
     args = parser.parse_args()
     if args.out_dir is None:

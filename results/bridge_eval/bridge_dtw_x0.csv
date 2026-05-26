@@ -1,0 +1,351 @@
+utterance_id,speaker,l1,domain,wav_path,text,prediction,reference_norm,prediction_norm,ref_num_words,utt_wer,utt_mer,utt_per
+arctic_a0229,BWC,Chinese,,,The last one I knew was an overseer, you,the last one i knew was an overseer,you,8,1.0,1.0,0.9565217391304348
+arctic_a0052,BWC,Chinese,,,It was a curious coincidence, you,it was a curious coincidence,you,5,1.0,1.0,0.9565217391304348
+arctic_a0564,BWC,Chinese,,,Then it is as I said Womble announced with finality, you,then it is as i said womble announced with finality,you,10,1.0,1.0,1.0
+arctic_a0502,BWC,Chinese,,,Anything unusual or abnormal was sufficient to send a fellow to Molokai, you,anything unusual or abnormal was sufficient to send a fellow to molokai,you,12,1.0,1.0,0.9636363636363636
+arctic_a0458,BWC,Chinese,,,The stout wood was crushed like an eggshell, you,the stout wood was crushed like an eggshell,you,8,1.0,1.0,1.0
+arctic_a0286,BWC,Chinese,,,Give them their choice between a fine or an official whipping, you,give them their choice between a fine or an official whipping,you,11,1.0,1.0,1.0
+arctic_a0210,BWC,Chinese,,,Its diameter was not more than two hundred yards, you,its diameter was not more than two hundred yards,you,9,1.0,1.0,0.9722222222222222
+arctic_b0526,BWC,Chinese,,,Thirty pounds said the captain with finality, you,thirty pounds said the captain with finality,you,7,1.0,1.0,1.0
+arctic_a0179,BWC,Chinese,,,Tomorrow I'm going after that bear he said, you,tomorrow im going after that bear he said,you,8,1.0,1.0,1.0
+arctic_b0273,BWC,Chinese,,,Then it was that a strange thing happened, you,then it was that a strange thing happened,you,8,1.0,1.0,1.0
+arctic_a0066,BWC,Chinese,,,He saw Jeanne falter for a moment, you,he saw jeanne falter for a moment,you,7,1.0,1.0,1.0
+arctic_a0062,BWC,Chinese,,,The men stared into each other's face, you,the men stared into each others face,you,7,1.0,1.0,0.9565217391304348
+arctic_a0192,BWC,Chinese,,,He didn't rush in, you,he didnt rush in,you,4,1.0,1.0,1.0
+arctic_a0448,BWC,Chinese,,,I was Hump cabin boy on the schooner Ghost, you,i was hump cabin boy on the schooner ghost,you,9,1.0,1.0,0.9642857142857143
+arctic_a0477,BWC,Chinese,,,Wada Louis and the steward are servants of Asiatic breed, you,wada louis and the steward are servants of asiatic breed,you,10,1.0,1.0,0.975
+arctic_b0444,BWC,Chinese,,,He did not know what went on in the minds of his superiors, you,he did not know what went on in the minds of his superiors,you,13,1.0,1.0,0.975609756097561
+arctic_a0055,BWC,Chinese,,,Philip stood undecided his ears strained to catch the slightest sound, you,philip stood undecided his ears strained to catch the slightest sound,you,11,1.0,1.0,0.9791666666666666
+arctic_a0408,BWC,Chinese,,,The Eldorado emptied its occupants into the street to see the test, you,the eldorado emptied its occupants into the street to see the test,you,12,1.0,1.0,0.9583333333333334
+arctic_b0268,BWC,Chinese,,,Saxon nodded and the boy frowned, you,saxon nodded and the boy frowned,you,6,1.0,1.0,1.0
+arctic_a0452,BWC,Chinese,,,Three oilers and a fourth engineer was his greeting, you,three oilers and a fourth engineer was his greeting,you,9,1.0,1.0,1.0
+arctic_b0328,BWC,Chinese,,,Change chairs Daylight commanded, you,change chairs daylight commanded,you,4,1.0,1.0,1.0
+arctic_a0570,BWC,Chinese,,,Behind him lay the thousand years long road across all Siberia and Russia, you,behind him lay the thousand years long road across all siberia and russia,you,13,1.0,1.0,0.98
+arctic_a0014,BWC,Chinese,,,Now you're coming down to business Phil he exclaimed, you,now youre coming down to business phil he exclaimed,you,9,1.0,1.0,0.9411764705882353
+arctic_a0327,BWC,Chinese,,,They were less stooped than we less springy in their movements, you,they were less stooped than we less springy in their movements,you,11,1.0,1.0,0.975
+arctic_b0274,BWC,Chinese,,,From the source of light a harsh voice said, you,from the source of light a harsh voice said,you,9,1.0,1.0,1.0
+arctic_b0105,BWC,Chinese,,,I know that you are in charge there and Jeanne knows, you,i know that you are in charge there and jeanne knows,you,11,0.9090909090909091,0.9090909090909091,0.9285714285714286
+arctic_a0319,BWC,Chinese,,,And the Edinburgh Evening News says with editorial gloom, you,and the edinburgh evening news says with editorial gloom,you,9,1.0,1.0,0.9743589743589743
+arctic_a0441,BWC,Chinese,,,Violent life and athletic sports had never appealed to me, you,violent life and athletic sports had never appealed to me,you,10,1.0,1.0,0.9761904761904762
+arctic_b0098,BWC,Chinese,,,Philip looked back from the crest and saw Jeanne leaning over the canoe, you,philip looked back from the crest and saw jeanne leaning over the canoe,you,13,1.0,1.0,0.9777777777777777
+arctic_a0190,BWC,Chinese,,,Next to them the Canada jays were most persistent, you,next to them the canada jays were most persistent,you,9,1.0,1.0,0.9722222222222222
+arctic_b0187,BWC,Chinese,,,Her achievements with cocoanuts were a revelation, you,her achievements with cocoanuts were a revelation,you,7,1.0,1.0,1.0
+arctic_a0199,BWC,Chinese,,,Thus had the raw wilderness prepared him for this day, you,thus had the raw wilderness prepared him for this day,you,10,1.0,1.0,1.0
+arctic_b0144,BWC,Chinese,,,But there was no longer the mother yearning in his heart, you,but there was no longer the mother yearning in his heart,you,11,1.0,1.0,0.9722222222222222
+arctic_b0113,BWC,Chinese,,,There was something pathetic in the girl's attitude now, you,there was something pathetic in the girls attitude now,you,9,1.0,1.0,0.9714285714285714
+arctic_a0542,BWC,Chinese,,,Without a doubt some of them have dinner engagements, you,without a doubt some of them have dinner engagements,you,9,1.0,1.0,1.0
+arctic_a0089,BWC,Chinese,,,The night glow was treacherous to shoot by, you,the night glow was treacherous to shoot by,you,8,1.0,1.0,0.96
+arctic_b0350,BWC,Chinese,,,Stand off butcher and baker and all the rest, you,stand off butcher and baker and all the rest,you,9,1.0,1.0,1.0
+arctic_b0508,BWC,Chinese,,,In his anxiety and solicitude and love they did not count, you,in his anxiety and solicitude and love they did not count,you,11,1.0,1.0,0.9761904761904762
+arctic_a0256,BWC,Chinese,,,See the length of the body and that elongated neck, you,see the length of the body and that elongated neck,you,10,1.0,1.0,1.0
+arctic_b0184,BWC,Chinese,,,Such things in her brain were like so many oaths on her lips, you,such things in her brain were like so many oaths on her lips,you,13,1.0,1.0,1.0
+arctic_a0162,BWC,Chinese,,,That's the sub foreman explained Thorpe, you,thats the sub foreman explained thorpe,you,6,1.0,1.0,1.0
+arctic_b0008,BWC,Chinese,,,Burke himself had criticized it because of the smile, you,burke himself had criticized it because of the smile,you,9,1.0,1.0,1.0
+arctic_b0149,BWC,Chinese,,,Pebbles and dirt flew along with hair and fur, you,pebbles and dirt flew along with hair and fur,you,9,1.0,1.0,0.9666666666666667
+arctic_a0394,BWC,Chinese,,,It was strap hangers that will keep us from going under, you,it was strap hangers that will keep us from going under,you,11,1.0,1.0,1.0
+arctic_a0143,BWC,Chinese,,,Ah I had forgotten he exclaimed, you,ah i had forgotten he exclaimed,you,6,1.0,1.0,1.0
+arctic_a0094,BWC,Chinese,,,He had barely entered this when he saw the glow of a fire, you,he had barely entered this when he saw the glow of a fire,you,13,1.0,1.0,1.0
+arctic_a0467,BWC,Chinese,,,And so early in the voyage too, you,and so early in the voyage too,you,7,1.0,1.0,0.9444444444444444
+arctic_a0593,BWC,Chinese,,,She'd make a good wife for the cashier, you,shed make a good wife for the cashier,you,8,1.0,1.0,1.0
+arctic_a0164,BWC,Chinese,,,He came first a year ago and revealed himself to Jeanne, you,he came first a year ago and revealed himself to jeanne,you,11,1.0,1.0,0.9459459459459459
+arctic_a0207,BWC,Chinese,,,How much was it, you,how much was it,you,4,1.0,1.0,1.0
+arctic_b0063,EBVS,Spanish,,,He boiled himself some coffee and sat down to wait, you,he boiled himself some coffee and sat down to wait,you,10,1.0,1.0,0.9705882352941176
+arctic_a0115,EBVS,Spanish,,,He had no excuse for the feelings which were aroused in him, you,he had no excuse for the feelings which were aroused in him,you,12,1.0,1.0,0.9487179487179487
+arctic_a0026,EBVS,Spanish,,,It occurred to me that there would have to be an accounting, you,it occurred to me that there would have to be an accounting,you,12,1.0,1.0,0.9714285714285714
+arctic_b0168,EBVS,Spanish,,,The Indian felt the worship of her warm in his heart, you,the indian felt the worship of her warm in his heart,you,11,1.0,1.0,1.0
+arctic_a0282,EBVS,Spanish,,,If you mean to insinuate Brentwood began hotly, you,if you mean to insinuate brentwood began hotly,you,8,0.875,0.875,0.9444444444444444
+arctic_a0251,EBVS,Spanish,,,I may manage to freight a cargo back as well, you,i may manage to freight a cargo back as well,you,10,1.0,1.0,0.9642857142857143
+arctic_a0229,EBVS,Spanish,,,The last one I knew was an overseer, you,the last one i knew was an overseer,you,8,1.0,1.0,0.9565217391304348
+arctic_a0143,EBVS,Spanish,,,Ah I had forgotten he exclaimed, you,ah i had forgotten he exclaimed,you,6,1.0,1.0,1.0
+arctic_b0163,EBVS,Spanish,,,The moon had already begun its westward decline, you,the moon had already begun its westward decline,you,8,1.0,1.0,0.9714285714285714
+arctic_a0105,EBVS,Spanish,,,Only it is so wonderful so almost impossible to believe, you,only it is so wonderful so almost impossible to believe,you,10,1.0,1.0,0.9761904761904762
+arctic_b0101,EBVS,Spanish,,,You're a devil for fighting and will surely win, you,youre a devil for fighting and will surely win,you,9,1.0,1.0,0.967741935483871
+arctic_b0167,EBVS,Spanish,,,A little before dawn of the day following the fire relief came, you,a little before dawn of the day following the fire relief came,you,12,1.0,1.0,1.0
+arctic_b0322,EBVS,Spanish,,,Their supply of grub was gone, you,their supply of grub was gone,you,6,1.0,1.0,1.0
+arctic_a0559,EBVS,Spanish,,,Peace be unto you and grace before the Lord, you,peace be unto you and grace before the lord,you,9,0.8888888888888888,0.8888888888888888,0.9310344827586207
+arctic_a0090,EBVS,Spanish,,,The singing voice approached rapidly, you,the singing voice approached rapidly,you,5,1.0,1.0,1.0
+arctic_b0012,EBVS,Spanish,,,Something that Whittemore had not yet said thrilled him, you,something that whittemore had not yet said thrilled him,you,9,1.0,1.0,0.9714285714285714
+arctic_a0433,EBVS,Spanish,,,To her the bridge was tambo which is the native for taboo, you,to her the bridge was tambo which is the native for taboo,you,12,1.0,1.0,0.972972972972973
+arctic_a0033,EBVS,Spanish,,,He unfolded a long typewritten letter and handed it to Gregson, you,he unfolded a long typewritten letter and handed it to gregson,you,11,1.0,1.0,0.9782608695652174
+arctic_a0031,EBVS,Spanish,,,They were three hundred yards apart, you,they were three hundred yards apart,you,6,1.0,1.0,0.9583333333333334
+arctic_a0096,EBVS,Spanish,,,Perhaps she had already met her fate a little deeper in the forest, you,perhaps she had already met her fate a little deeper in the forest,you,13,1.0,1.0,1.0
+arctic_a0224,EBVS,Spanish,,,She nodded and her eyes grew soft and moist, you,she nodded and her eyes grew soft and moist,you,9,1.0,1.0,0.9642857142857143
+arctic_a0239,EBVS,Spanish,,,He cried in such genuine dismay that she broke into hearty laughter, you,he cried in such genuine dismay that she broke into hearty laughter,you,12,1.0,1.0,0.9574468085106383
+arctic_a0518,EBVS,Spanish,,,Illuminating oil was becoming all profit, you,illuminating oil was becoming all profit,you,6,1.0,1.0,0.9666666666666667
+arctic_b0025,EBVS,Spanish,,,Now you understand, you,now you understand,you,3,0.6666666666666666,0.6666666666666666,0.8461538461538461
+arctic_a0028,EBVS,Spanish,,,Robbery bribery fraud, you,robbery bribery fraud,you,3,1.0,1.0,1.0
+arctic_a0575,EBVS,Spanish,,,There weren't any missions and he was the man to know, you,there werent any missions and he was the man to know,you,11,1.0,1.0,0.9714285714285714
+arctic_a0204,EBVS,Spanish,,,The wolf dog thrust his gaunt muzzle toward him, you,the wolf dog thrust his gaunt muzzle toward him,you,9,1.0,1.0,1.0
+arctic_b0142,EBVS,Spanish,,,Something vastly more thrilling had come into it now, you,something vastly more thrilling had come into it now,you,9,1.0,1.0,0.9714285714285714
+arctic_b0074,EBVS,Spanish,,,Yet behind them there was another and more powerful motive, you,yet behind them there was another and more powerful motive,you,10,1.0,1.0,0.975
+arctic_b0127,EBVS,Spanish,,,He destroyed everything that had belonged to the woman, you,he destroyed everything that had belonged to the woman,you,9,1.0,1.0,0.972972972972973
+arctic_a0430,EBVS,Spanish,,,Nevertheless we find we found ourselves once more in the high seat of abundance, you,nevertheless we find we found ourselves once more in the high seat of abundance,you,14,1.0,1.0,1.0
+arctic_a0226,EBVS,Spanish,,,That came before my A B C's, you,that came before my a b cs,you,7,1.0,1.0,1.0
+arctic_a0460,EBVS,Spanish,,,I had forgotten their existence, you,i had forgotten their existence,you,5,1.0,1.0,1.0
+arctic_b0011,EBVS,Spanish,,,He never took themselves for an instant from his companion's face, you,he never took themselves for an instant from his companions face,you,11,1.0,1.0,0.9795918367346939
+arctic_a0285,EBVS,Spanish,,,But what they want with your toothbrush is more than I can imagine, you,but what they want with your toothbrush is more than i can imagine,you,13,1.0,1.0,0.9534883720930233
+arctic_b0237,EBVS,Spanish,,,They just lay off in the bush and plugged away, you,they just lay off in the bush and plugged away,you,10,1.0,1.0,1.0
+arctic_b0299,EBVS,Spanish,,,Miss Brodie's smile was slightly sarcastic, you,miss brodies smile was slightly sarcastic,you,6,1.0,1.0,1.0
+arctic_a0007,EBVS,Spanish,,,And you always want to see it in the superlative degree, you,and you always want to see it in the superlative degree,you,11,0.9090909090909091,0.9090909090909091,0.9473684210526315
+arctic_b0186,EBVS,Spanish,,,I can't go elsewhere by your own account, you,i cant go elsewhere by your own account,you,8,1.0,1.0,0.96
+arctic_b0234,EBVS,Spanish,,,And watch out for wet feet was his parting advice, you,and watch out for wet feet was his parting advice,you,10,1.0,1.0,1.0
+arctic_a0164,EBVS,Spanish,,,He came first a year ago and revealed himself to Jeanne, you,he came first a year ago and revealed himself to jeanne,you,11,1.0,1.0,0.9459459459459459
+arctic_b0123,EBVS,Spanish,,,Neither could they understand the growing disaffection among Thorpe's men, you,neither could they understand the growing disaffection among thorpes men,you,10,1.0,1.0,1.0
+arctic_a0349,EBVS,Spanish,,,It was simple in its way and no virtue of his, you,it was simple in its way and no virtue of his,you,11,1.0,1.0,0.96875
+arctic_a0160,EBVS,Spanish,,,You want to go over and see his gang throw dirt, you,you want to go over and see his gang throw dirt,you,11,0.9090909090909091,0.9090909090909091,0.9333333333333333
+arctic_a0221,EBVS,Spanish,,,I don't know why you're here at all, you,i dont know why youre here at all,you,8,1.0,1.0,0.9473684210526315
+arctic_b0389,EBVS,Spanish,,,Among my minor afflictions I may mention a new and mysterious one, you,among my minor afflictions i may mention a new and mysterious one,you,12,1.0,1.0,0.9782608695652174
+arctic_b0190,EBVS,Spanish,,,Idealism led him to philosophic anarchy and his family threw him off, you,idealism led him to philosophic anarchy and his family threw him off,you,12,1.0,1.0,0.98
+arctic_a0345,EBVS,Spanish,,,She was trying to pass the apron string around him, you,she was trying to pass the apron string around him,you,10,1.0,1.0,0.9705882352941176
+arctic_a0095,EBVS,Spanish,,,A big canvas tent was the first thing to come within his vision, you,a big canvas tent was the first thing to come within his vision,you,13,1.0,1.0,0.9772727272727273
+arctic_a0390,EBVS,Spanish,,,I'll go over tomorrow afternoon, you,ill go over tomorrow afternoon,you,5,1.0,1.0,0.95
+arctic_a0229,HJK,Korean,,,The last one I knew was an overseer, you,the last one i knew was an overseer,you,8,1.0,1.0,0.9565217391304348
+arctic_a0052,HJK,Korean,,,It was a curious coincidence, you,it was a curious coincidence,you,5,1.0,1.0,0.9565217391304348
+arctic_a0564,HJK,Korean,,,Then it is as I said Womble announced with finality, you,then it is as i said womble announced with finality,you,10,1.0,1.0,1.0
+arctic_a0502,HJK,Korean,,,Anything unusual or abnormal was sufficient to send a fellow to Molokai, you,anything unusual or abnormal was sufficient to send a fellow to molokai,you,12,1.0,1.0,0.9636363636363636
+arctic_a0458,HJK,Korean,,,The stout wood was crushed like an eggshell, you,the stout wood was crushed like an eggshell,you,8,1.0,1.0,1.0
+arctic_a0286,HJK,Korean,,,Give them their choice between a fine or an official whipping, you,give them their choice between a fine or an official whipping,you,11,1.0,1.0,1.0
+arctic_a0210,HJK,Korean,,,Its diameter was not more than two hundred yards, you,its diameter was not more than two hundred yards,you,9,1.0,1.0,0.9722222222222222
+arctic_b0525,HJK,Korean,,,New idea he volunteered brand new idea, you,new idea he volunteered brand new idea,you,7,1.0,1.0,0.9642857142857143
+arctic_a0179,HJK,Korean,,,Tomorrow I'm going after that bear he said, you,tomorrow im going after that bear he said,you,8,1.0,1.0,1.0
+arctic_b0273,HJK,Korean,,,Then it was that a strange thing happened, you,then it was that a strange thing happened,you,8,1.0,1.0,1.0
+arctic_a0066,HJK,Korean,,,He saw Jeanne falter for a moment, you,he saw jeanne falter for a moment,you,7,1.0,1.0,1.0
+arctic_a0062,HJK,Korean,,,The men stared into each other's face, you,the men stared into each others face,you,7,1.0,1.0,0.9565217391304348
+arctic_a0192,HJK,Korean,,,He did not rush in, you,he did not rush in,you,5,1.0,1.0,1.0
+arctic_a0448,HJK,Korean,,,I was Hump cabin boy on the schooner Ghost, you,i was hump cabin boy on the schooner ghost,you,9,1.0,1.0,0.9642857142857143
+arctic_a0477,HJK,Korean,,,Wada Louis and the steward are servants of Asiatic breed, you,wada louis and the steward are servants of asiatic breed,you,10,1.0,1.0,0.975
+arctic_b0443,HJK,Korean,,,I did not think you would be so early, you,i did not think you would be so early,you,9,0.8888888888888888,0.8888888888888888,0.9130434782608695
+arctic_a0055,HJK,Korean,,,Philip stood undecided his ears strained to catch the slightest sound, you,philip stood undecided his ears strained to catch the slightest sound,you,11,1.0,1.0,0.9791666666666666
+arctic_a0408,HJK,Korean,,,The Eldorado emptied its occupants into the street to see the test, you,the eldorado emptied its occupants into the street to see the test,you,12,1.0,1.0,0.9583333333333334
+arctic_b0268,HJK,Korean,,,Saxon nodded and the boy frowned, you,saxon nodded and the boy frowned,you,6,1.0,1.0,1.0
+arctic_a0452,HJK,Korean,,,Three oilers and a fourth engineer was his greeting, you,three oilers and a fourth engineer was his greeting,you,9,1.0,1.0,1.0
+arctic_b0328,HJK,Korean,,,Change chairs Daylight commanded, you,change chairs daylight commanded,you,4,1.0,1.0,1.0
+arctic_a0570,HJK,Korean,,,Behind him lay the thousand years long road across all Siberia and Russia, you,behind him lay the thousand years long road across all siberia and russia,you,13,1.0,1.0,0.98
+arctic_a0014,HJK,Korean,,,Now you're coming down to business Phil he exclaimed, you,now youre coming down to business phil he exclaimed,you,9,1.0,1.0,0.9411764705882353
+arctic_a0327,HJK,Korean,,,They were less stooped than we less springy in their movements, you,they were less stooped than we less springy in their movements,you,11,1.0,1.0,0.975
+arctic_b0274,HJK,Korean,,,From the source of light a harsh voice said, you,from the source of light a harsh voice said,you,9,1.0,1.0,1.0
+arctic_b0105,HJK,Korean,,,I know that you are in charge there and Jeanne knows, you,i know that you are in charge there and jeanne knows,you,11,0.9090909090909091,0.9090909090909091,0.9285714285714286
+arctic_a0319,HJK,Korean,,,And the Edinburgh Evening News says with editorial gloom, you,and the edinburgh evening news says with editorial gloom,you,9,1.0,1.0,0.9743589743589743
+arctic_a0441,HJK,Korean,,,Violent life and athletic sports had never appealed to me, you,violent life and athletic sports had never appealed to me,you,10,1.0,1.0,0.9761904761904762
+arctic_b0098,HJK,Korean,,,Philip looked back from the crest and saw Jeanne leaning over the canoe, you,philip looked back from the crest and saw jeanne leaning over the canoe,you,13,1.0,1.0,0.9777777777777777
+arctic_a0190,HJK,Korean,,,Next to them the Canada jays were most persistent, you,next to them the canada jays were most persistent,you,9,1.0,1.0,0.9722222222222222
+arctic_b0187,HJK,Korean,,,Her achievements with cocoanuts were a revelation, you,her achievements with cocoanuts were a revelation,you,7,1.0,1.0,1.0
+arctic_a0199,HJK,Korean,,,Thus had the raw wilderness prepared him for this day, you,thus had the raw wilderness prepared him for this day,you,10,1.0,1.0,1.0
+arctic_b0144,HJK,Korean,,,But there was no longer the mother yearning in his heart, you,but there was no longer the mother yearning in his heart,you,11,1.0,1.0,0.9722222222222222
+arctic_b0113,HJK,Korean,,,There was something pathetic in the girl's attitude now, you,there was something pathetic in the girls attitude now,you,9,1.0,1.0,0.9714285714285714
+arctic_a0542,HJK,Korean,,,Without a doubt some of them have dinner engagements, you,without a doubt some of them have dinner engagements,you,9,1.0,1.0,1.0
+arctic_a0089,HJK,Korean,,,The night glow was treacherous to shoot by, you,the night glow was treacherous to shoot by,you,8,1.0,1.0,0.96
+arctic_b0349,HJK,Korean,,,In such a tumbling of values was no time to sell, you,in such a tumbling of values was no time to sell,you,11,1.0,1.0,0.9428571428571428
+arctic_b0507,HJK,Korean,,,Did I possess too much vitality, you,did i possess too much vitality,you,6,1.0,1.0,0.9545454545454546
+arctic_a0256,HJK,Korean,,,See the length of the body and that elongated neck, you,see the length of the body and that elongated neck,you,10,1.0,1.0,1.0
+arctic_b0184,HJK,Korean,,,Such things in her brain were like so many oaths on her lips, you,such things in her brain were like so many oaths on her lips,you,13,1.0,1.0,1.0
+arctic_a0162,HJK,Korean,,,That's the sub foreman explained Thorpe, you,thats the sub foreman explained thorpe,you,6,1.0,1.0,1.0
+arctic_b0539,HJK,Korean,,,You were making them talk shop Ruth charged him, you,you were making them talk shop ruth charged him,you,9,0.8888888888888888,0.8888888888888888,0.9310344827586207
+arctic_b0008,HJK,Korean,,,Burke himself had criticized it because of the smile, you,burke himself had criticized it because of the smile,you,9,1.0,1.0,1.0
+arctic_b0149,HJK,Korean,,,Pebbles and dirt flew along with hair and fur, you,pebbles and dirt flew along with hair and fur,you,9,1.0,1.0,0.9666666666666667
+arctic_a0394,HJK,Korean,,,It's the strap hangers that'll keep us from going under, you,its the strap hangers thatll keep us from going under,you,10,1.0,1.0,1.0
+arctic_a0143,HJK,Korean,,,Ah I had forgotten he exclaimed, you,ah i had forgotten he exclaimed,you,6,1.0,1.0,1.0
+arctic_a0094,HJK,Korean,,,He had barely entered this when he saw the glow of a fire, you,he had barely entered this when he saw the glow of a fire,you,13,1.0,1.0,1.0
+arctic_a0467,HJK,Korean,,,And so early in the voyage too, you,and so early in the voyage too,you,7,1.0,1.0,0.9444444444444444
+arctic_a0593,HJK,Korean,,,She'd make a good wife for the cashier, you,shed make a good wife for the cashier,you,8,1.0,1.0,1.0
+arctic_a0164,HJK,Korean,,,He came first a year ago and revealed himself to Jeanne, you,he came first a year ago and revealed himself to jeanne,you,11,1.0,1.0,0.9459459459459459
+arctic_a0229,HQTV,Vietnamese,,,The last one I knew was an overseer, you,the last one i knew was an overseer,you,8,1.0,1.0,0.9565217391304348
+arctic_a0052,HQTV,Vietnamese,,,It was a curious coincidence, you,it was a curious coincidence,you,5,1.0,1.0,0.9565217391304348
+arctic_a0564,HQTV,Vietnamese,,,Then it is as I said Womble announced with finality, you,then it is as i said womble announced with finality,you,10,1.0,1.0,1.0
+arctic_a0502,HQTV,Vietnamese,,,Anything unusual or abnormal was sufficient to send a fellow to Molokai, you,anything unusual or abnormal was sufficient to send a fellow to molokai,you,12,1.0,1.0,0.9636363636363636
+arctic_a0458,HQTV,Vietnamese,,,The stout wood was crushed like an eggshell, you,the stout wood was crushed like an eggshell,you,8,1.0,1.0,1.0
+arctic_a0286,HQTV,Vietnamese,,,Give them their choice between a fine or an official whipping, you,give them their choice between a fine or an official whipping,you,11,1.0,1.0,1.0
+arctic_a0210,HQTV,Vietnamese,,,Its diameter was not more than two hundred yards, you,its diameter was not more than two hundred yards,you,9,1.0,1.0,0.9722222222222222
+arctic_b0524,HQTV,Vietnamese,,,So far as flags were concerned they were beyond all jurisdiction, you,so far as flags were concerned they were beyond all jurisdiction,you,11,1.0,1.0,1.0
+arctic_a0179,HQTV,Vietnamese,,,Tomorrow I'm going after that bear he said, you,tomorrow im going after that bear he said,you,8,1.0,1.0,1.0
+arctic_b0272,HQTV,Vietnamese,,,These were merely stout sticks an inch or so in diameter, you,these were merely stout sticks an inch or so in diameter,you,11,1.0,1.0,1.0
+arctic_a0066,HQTV,Vietnamese,,,He saw Jeanne falter for a moment, you,he saw jeanne falter for a moment,you,7,1.0,1.0,1.0
+arctic_a0062,HQTV,Vietnamese,,,The men stared into each other's face, you,the men stared into each others face,you,7,1.0,1.0,0.9565217391304348
+arctic_a0192,HQTV,Vietnamese,,,He did not rush in, you,he did not rush in,you,5,1.0,1.0,1.0
+arctic_a0448,HQTV,Vietnamese,,,I was Hump cabin boy on the schooner Ghost, you,i was hump cabin boy on the schooner ghost,you,9,1.0,1.0,0.9642857142857143
+arctic_a0477,HQTV,Vietnamese,,,Wada Louis and the steward are servants of Asiatic breed, you,wada louis and the steward are servants of asiatic breed,you,10,1.0,1.0,0.975
+arctic_b0442,HQTV,Vietnamese,,,He had become a man very early in life, you,he had become a man very early in life,you,9,1.0,1.0,1.0
+arctic_a0055,HQTV,Vietnamese,,,Philip stood undecided his ears strained to catch the slightest sound, you,philip stood undecided his ears strained to catch the slightest sound,you,11,1.0,1.0,0.9791666666666666
+arctic_a0408,HQTV,Vietnamese,,,The Eldorado emptied its occupants into the street to see the test, you,the eldorado emptied its occupants into the street to see the test,you,12,1.0,1.0,0.9583333333333334
+arctic_b0267,HQTV,Vietnamese,,,The boy threw back his head with pride, you,the boy threw back his head with pride,you,8,1.0,1.0,0.9565217391304348
+arctic_a0452,HQTV,Vietnamese,,,Three oilers and a fourth engineer was his greeting, you,three oilers and a fourth engineer was his greeting,you,9,1.0,1.0,1.0
+arctic_b0327,HQTV,Vietnamese,,,He had been so easy, you,he had been so easy,you,5,1.0,1.0,1.0
+arctic_a0570,HQTV,Vietnamese,,,Behind him lay the thousand years long road across all Siberia and Russia, you,behind him lay the thousand years long road across all siberia and russia,you,13,1.0,1.0,0.98
+arctic_a0014,HQTV,Vietnamese,,,Now you're coming down to business Phil he exclaimed, you,now youre coming down to business phil he exclaimed,you,9,1.0,1.0,0.9411764705882353
+arctic_a0327,HQTV,Vietnamese,,,They were less stooped than we less springy in their movements, you,they were less stooped than we less springy in their movements,you,11,1.0,1.0,0.975
+arctic_b0273,HQTV,Vietnamese,,,Then it was that a strange thing happened, you,then it was that a strange thing happened,you,8,1.0,1.0,1.0
+arctic_b0104,HQTV,Vietnamese,,,Shooting pains passed like flashes of electricity through his body, you,shooting pains passed like flashes of electricity through his body,you,10,1.0,1.0,0.9777777777777777
+arctic_a0319,HQTV,Vietnamese,,,And the Edinburgh Evening News says with editorial gloom, you,and the edinburgh evening news says with editorial gloom,you,9,1.0,1.0,0.9743589743589743
+arctic_a0441,HQTV,Vietnamese,,,Violent life and athletic sports had never appealed to me, you,violent life and athletic sports had never appealed to me,you,10,1.0,1.0,0.9761904761904762
+arctic_b0097,HQTV,Vietnamese,,,Besides that noise makes me deaf, you,besides that noise makes me deaf,you,6,1.0,1.0,1.0
+arctic_a0190,HQTV,Vietnamese,,,Next to them the Canada jays were most persistent, you,next to them the canada jays were most persistent,you,9,1.0,1.0,0.9722222222222222
+arctic_b0186,HQTV,Vietnamese,,,I can't go elsewhere by your own account, you,i cant go elsewhere by your own account,you,8,1.0,1.0,0.96
+arctic_a0199,HQTV,Vietnamese,,,Thus had the raw wilderness prepared him for this day, you,thus had the raw wilderness prepared him for this day,you,10,1.0,1.0,1.0
+arctic_b0143,HQTV,Vietnamese,,,It took him half an hour to reach the edge of it, you,it took him half an hour to reach the edge of it,you,12,1.0,1.0,0.9642857142857143
+arctic_b0112,HQTV,Vietnamese,,,Jeanne and Pierre both gazed toward the great rock, you,jeanne and pierre both gazed toward the great rock,you,9,1.0,1.0,1.0
+arctic_a0542,HQTV,Vietnamese,,,Without a doubt some of them have dinner engagements, you,without a doubt some of them have dinner engagements,you,9,1.0,1.0,1.0
+arctic_a0089,HQTV,Vietnamese,,,The night glow was treacherous to shoot by, you,the night glow was treacherous to shoot by,you,8,1.0,1.0,0.96
+arctic_b0348,HQTV,Vietnamese,,,Would you be satisfied with that one hundredth part of me, you,would you be satisfied with that one hundredth part of me,you,11,0.9090909090909091,0.9090909090909091,0.95
+arctic_b0506,HQTV,Vietnamese,,,It would help to tide me along until I got steady employment, you,it would help to tide me along until i got steady employment,you,12,1.0,1.0,0.9767441860465116
+arctic_a0256,HQTV,Vietnamese,,,See the length of the body and that elongated neck, you,see the length of the body and that elongated neck,you,10,1.0,1.0,1.0
+arctic_b0183,HQTV,Vietnamese,,,No I did not fall among thieves, you,no i did not fall among thieves,you,7,1.0,1.0,1.0
+arctic_a0162,HQTV,Vietnamese,,,That's the sub foreman explained Thorpe, you,thats the sub foreman explained thorpe,you,6,1.0,1.0,1.0
+arctic_b0538,HQTV,Vietnamese,,,At the best they were necessary accessories, you,at the best they were necessary accessories,you,7,1.0,1.0,1.0
+arctic_b0008,HQTV,Vietnamese,,,Burke himself had criticized it because of the smile, you,burke himself had criticized it because of the smile,you,9,1.0,1.0,1.0
+arctic_b0148,HQTV,Vietnamese,,,The Indian even poked his stick into the thick ground spruce, you,the indian even poked his stick into the thick ground spruce,you,11,1.0,1.0,0.9761904761904762
+arctic_a0394,HQTV,Vietnamese,,,It's the strap hangers that'll keep us from going under, you,its the strap hangers thatll keep us from going under,you,10,1.0,1.0,1.0
+arctic_a0143,HQTV,Vietnamese,,,Ah I had forgotten he exclaimed, you,ah i had forgotten he exclaimed,you,6,1.0,1.0,1.0
+arctic_a0094,HQTV,Vietnamese,,,He had barely entered this when he saw the glow of a fire, you,he had barely entered this when he saw the glow of a fire,you,13,1.0,1.0,1.0
+arctic_a0467,HQTV,Vietnamese,,,And so early in the voyage too, you,and so early in the voyage too,you,7,1.0,1.0,0.9444444444444444
+arctic_a0593,HQTV,Vietnamese,,,She'd make a good wife for the cashier, you,shed make a good wife for the cashier,you,8,1.0,1.0,1.0
+arctic_a0164,HQTV,Vietnamese,,,He came first a year ago and revealed himself to Jeanne, you,he came first a year ago and revealed himself to jeanne,you,11,1.0,1.0,0.9459459459459459
+arctic_a0229,SVBI,Hindi,,,The last one I knew was an overseer, you,the last one i knew was an overseer,you,8,1.0,1.0,0.9565217391304348
+arctic_a0052,SVBI,Hindi,,,It was a curious coincidence, you,it was a curious coincidence,you,5,1.0,1.0,0.9565217391304348
+arctic_a0564,SVBI,Hindi,,,Then it is as I said Womble announced with finality, you,then it is as i said womble announced with finality,you,10,1.0,1.0,1.0
+arctic_a0502,SVBI,Hindi,,,Anything unusual or abnormal was sufficient to send a fellow to Molokai, you,anything unusual or abnormal was sufficient to send a fellow to molokai,you,12,1.0,1.0,0.9636363636363636
+arctic_a0458,SVBI,Hindi,,,The stout wood was crushed like an eggshell, you,the stout wood was crushed like an eggshell,you,8,1.0,1.0,1.0
+arctic_a0286,SVBI,Hindi,,,Give them their choice between a fine or an official whipping, you,give them their choice between a fine or an official whipping,you,11,1.0,1.0,1.0
+arctic_a0210,SVBI,Hindi,,,Its diameter was not more than two hundred yards, you,its diameter was not more than two hundred yards,you,9,1.0,1.0,0.9722222222222222
+arctic_b0524,SVBI,Hindi,,,So far as flags were concerned they were beyond all jurisdiction, you,so far as flags were concerned they were beyond all jurisdiction,you,11,1.0,1.0,1.0
+arctic_a0179,SVBI,Hindi,,,Tomorrow I'm going after that bear he said, you,tomorrow im going after that bear he said,you,8,1.0,1.0,1.0
+arctic_b0272,SVBI,Hindi,,,These were merely stout sticks an inch or so in diameter, you,these were merely stout sticks an inch or so in diameter,you,11,1.0,1.0,1.0
+arctic_a0066,SVBI,Hindi,,,He saw Jeanne falter for a moment, you,he saw jeanne falter for a moment,you,7,1.0,1.0,1.0
+arctic_a0062,SVBI,Hindi,,,The men stared into each other's face, you,the men stared into each others face,you,7,1.0,1.0,0.9565217391304348
+arctic_a0192,SVBI,Hindi,,,He did not rush in, you,he did not rush in,you,5,1.0,1.0,1.0
+arctic_a0448,SVBI,Hindi,,,I was Hump cabin boy on the schooner Ghost, you,i was hump cabin boy on the schooner ghost,you,9,1.0,1.0,0.9642857142857143
+arctic_a0477,SVBI,Hindi,,,Wada Louis and the steward are servants of Asiatic breed, you,wada louis and the steward are servants of asiatic breed,you,10,1.0,1.0,0.975
+arctic_b0442,SVBI,Hindi,,,He had become a man very early in life, you,he had become a man very early in life,you,9,1.0,1.0,1.0
+arctic_a0055,SVBI,Hindi,,,Philip stood undecided his ears strained to catch the slightest sound, you,philip stood undecided his ears strained to catch the slightest sound,you,11,1.0,1.0,0.9791666666666666
+arctic_a0408,SVBI,Hindi,,,The Eldorado emptied its occupants into the street to see the test, you,the eldorado emptied its occupants into the street to see the test,you,12,1.0,1.0,0.9583333333333334
+arctic_b0267,SVBI,Hindi,,,The boy threw back his head with pride, you,the boy threw back his head with pride,you,8,1.0,1.0,0.9565217391304348
+arctic_a0452,SVBI,Hindi,,,Three oilers and a fourth engineer was his greeting, you,three oilers and a fourth engineer was his greeting,you,9,1.0,1.0,1.0
+arctic_b0327,SVBI,Hindi,,,He had been so easy, you,he had been so easy,you,5,1.0,1.0,1.0
+arctic_a0570,SVBI,Hindi,,,Behind him lay the thousand years long road across all Siberia and Russia, you,behind him lay the thousand years long road across all siberia and russia,you,13,1.0,1.0,0.98
+arctic_a0014,SVBI,Hindi,,,Now you're coming down to business Phil he exclaimed, you,now youre coming down to business phil he exclaimed,you,9,1.0,1.0,0.9411764705882353
+arctic_a0327,SVBI,Hindi,,,They were less stooped than we less springy in their movements, you,they were less stooped than we less springy in their movements,you,11,1.0,1.0,0.975
+arctic_b0273,SVBI,Hindi,,,Then it was that a strange thing happened, you,then it was that a strange thing happened,you,8,1.0,1.0,1.0
+arctic_b0104,SVBI,Hindi,,,Shooting pains passed like flashes of electricity through his body, you,shooting pains passed like flashes of electricity through his body,you,10,1.0,1.0,0.9777777777777777
+arctic_a0319,SVBI,Hindi,,,And the Edinburgh Evening News says with editorial gloom, you,and the edinburgh evening news says with editorial gloom,you,9,1.0,1.0,0.9743589743589743
+arctic_a0441,SVBI,Hindi,,,Violent life and athletic sports had never appealed to me, you,violent life and athletic sports had never appealed to me,you,10,1.0,1.0,0.9761904761904762
+arctic_b0097,SVBI,Hindi,,,Besides that noise makes me deaf, you,besides that noise makes me deaf,you,6,1.0,1.0,1.0
+arctic_a0190,SVBI,Hindi,,,Next to them the Canada jays were most persistent, you,next to them the canada jays were most persistent,you,9,1.0,1.0,0.9722222222222222
+arctic_b0186,SVBI,Hindi,,,I can't go elsewhere by your own account, you,i cant go elsewhere by your own account,you,8,1.0,1.0,0.96
+arctic_a0199,SVBI,Hindi,,,Thus had the raw wilderness prepared him for this day, you,thus had the raw wilderness prepared him for this day,you,10,1.0,1.0,1.0
+arctic_b0143,SVBI,Hindi,,,It took him half an hour to reach the edge of it, you,it took him half an hour to reach the edge of it,you,12,1.0,1.0,0.9642857142857143
+arctic_b0112,SVBI,Hindi,,,Jeanne and Pierre both gazed toward the great rock, you,jeanne and pierre both gazed toward the great rock,you,9,1.0,1.0,1.0
+arctic_a0542,SVBI,Hindi,,,Without a doubt some of them have dinner engagements, you,without a doubt some of them have dinner engagements,you,9,1.0,1.0,1.0
+arctic_a0089,SVBI,Hindi,,,The night glow was treacherous to shoot by, you,the night glow was treacherous to shoot by,you,8,1.0,1.0,0.96
+arctic_b0348,SVBI,Hindi,,,Would you be satisfied with that one hundredth part of me, you,would you be satisfied with that one hundredth part of me,you,11,0.9090909090909091,0.9090909090909091,0.95
+arctic_b0506,SVBI,Hindi,,,It would help to tide me along until I got steady employment, you,it would help to tide me along until i got steady employment,you,12,1.0,1.0,0.9767441860465116
+arctic_a0256,SVBI,Hindi,,,See the length of the body and that elongated neck, you,see the length of the body and that elongated neck,you,10,1.0,1.0,1.0
+arctic_b0183,SVBI,Hindi,,,No I did not fall among thieves, you,no i did not fall among thieves,you,7,1.0,1.0,1.0
+arctic_a0162,SVBI,Hindi,,,That's the sub foreman explained Thorpe, you,thats the sub foreman explained thorpe,you,6,1.0,1.0,1.0
+arctic_b0538,SVBI,Hindi,,,At the best they were necessary accessories, you,at the best they were necessary accessories,you,7,1.0,1.0,1.0
+arctic_b0008,SVBI,Hindi,,,Burke himself had criticized it because of the smile, you,burke himself had criticized it because of the smile,you,9,1.0,1.0,1.0
+arctic_b0148,SVBI,Hindi,,,The Indian even poked his stick into the thick ground spruce, you,the indian even poked his stick into the thick ground spruce,you,11,1.0,1.0,0.9761904761904762
+arctic_a0394,SVBI,Hindi,,,It's the strap hangers that'll keep us from going under, you,its the strap hangers thatll keep us from going under,you,10,1.0,1.0,1.0
+arctic_a0143,SVBI,Hindi,,,Ah I had forgotten he exclaimed, you,ah i had forgotten he exclaimed,you,6,1.0,1.0,1.0
+arctic_a0094,SVBI,Hindi,,,He had barely entered this when he saw the glow of a fire, you,he had barely entered this when he saw the glow of a fire,you,13,1.0,1.0,1.0
+arctic_a0467,SVBI,Hindi,,,And so early in the voyage too, you,and so early in the voyage too,you,7,1.0,1.0,0.9444444444444444
+arctic_a0593,SVBI,Hindi,,,She'd make a good wife for the cashier, you,shed make a good wife for the cashier,you,8,1.0,1.0,1.0
+arctic_a0164,SVBI,Hindi,,,He came first a year ago and revealed himself to Jeanne, you,he came first a year ago and revealed himself to jeanne,you,11,1.0,1.0,0.9459459459459459
+arctic_a0229,ZHAA,Arabic,,,The last one I knew was an overseer, you,the last one i knew was an overseer,you,8,1.0,1.0,0.9565217391304348
+arctic_a0052,ZHAA,Arabic,,,It was a curious coincidence, you,it was a curious coincidence,you,5,1.0,1.0,0.9565217391304348
+arctic_a0564,ZHAA,Arabic,,,Then it is as I said Womble announced with finality, you,then it is as i said womble announced with finality,you,10,1.0,1.0,1.0
+arctic_a0502,ZHAA,Arabic,,,Anything unusual or abnormal was sufficient to send a fellow to Molokai, you,anything unusual or abnormal was sufficient to send a fellow to molokai,you,12,1.0,1.0,0.9636363636363636
+arctic_a0458,ZHAA,Arabic,,,The stout wood was crushed like an eggshell, you,the stout wood was crushed like an eggshell,you,8,1.0,1.0,1.0
+arctic_a0286,ZHAA,Arabic,,,Give them their choice between a fine or an official whipping, you,give them their choice between a fine or an official whipping,you,11,1.0,1.0,1.0
+arctic_a0210,ZHAA,Arabic,,,Its diameter was not more than two hundred yards, you,its diameter was not more than two hundred yards,you,9,1.0,1.0,0.9722222222222222
+arctic_b0524,ZHAA,Arabic,,,So far as flags were concerned they were beyond all jurisdiction, you,so far as flags were concerned they were beyond all jurisdiction,you,11,1.0,1.0,1.0
+arctic_a0179,ZHAA,Arabic,,,Tomorrow I'm going after that bear he said, you,tomorrow im going after that bear he said,you,8,1.0,1.0,1.0
+arctic_b0272,ZHAA,Arabic,,,These were merely stout sticks an inch or so in diameter, you,these were merely stout sticks an inch or so in diameter,you,11,1.0,1.0,1.0
+arctic_a0066,ZHAA,Arabic,,,He saw Jeanne falter for a moment, you,he saw jeanne falter for a moment,you,7,1.0,1.0,1.0
+arctic_a0062,ZHAA,Arabic,,,The men stared into each other's face, you,the men stared into each others face,you,7,1.0,1.0,0.9565217391304348
+arctic_a0192,ZHAA,Arabic,,,He did not rush in, you,he did not rush in,you,5,1.0,1.0,1.0
+arctic_a0448,ZHAA,Arabic,,,I was Hump cabin boy on the schooner Ghost, you,i was hump cabin boy on the schooner ghost,you,9,1.0,1.0,0.9642857142857143
+arctic_a0477,ZHAA,Arabic,,,Wada Louis and the steward are servants of Asiatic breed, you,wada louis and the steward are servants of asiatic breed,you,10,1.0,1.0,0.975
+arctic_b0442,ZHAA,Arabic,,,He had become a man very early in life, you,he had become a man very early in life,you,9,1.0,1.0,1.0
+arctic_a0055,ZHAA,Arabic,,,Philip stood undecided his ears strained to catch the slightest sound, you,philip stood undecided his ears strained to catch the slightest sound,you,11,1.0,1.0,0.9791666666666666
+arctic_a0408,ZHAA,Arabic,,,The Eldorado emptied its occupants into the street to see the test, you,the eldorado emptied its occupants into the street to see the test,you,12,1.0,1.0,0.9583333333333334
+arctic_b0267,ZHAA,Arabic,,,The boy threw back his head with pride, you,the boy threw back his head with pride,you,8,1.0,1.0,0.9565217391304348
+arctic_a0452,ZHAA,Arabic,,,Three oilers and a fourth engineer was his greeting, you,three oilers and a fourth engineer was his greeting,you,9,1.0,1.0,1.0
+arctic_b0327,ZHAA,Arabic,,,He had been so easy, you,he had been so easy,you,5,1.0,1.0,1.0
+arctic_a0570,ZHAA,Arabic,,,Behind him lay the thousand years long road across all Siberia and Russia, you,behind him lay the thousand years long road across all siberia and russia,you,13,1.0,1.0,0.98
+arctic_a0014,ZHAA,Arabic,,,Now you're coming down to business Phil he exclaimed, you,now youre coming down to business phil he exclaimed,you,9,1.0,1.0,0.9411764705882353
+arctic_a0327,ZHAA,Arabic,,,They were less stooped than we less springy in their movements, you,they were less stooped than we less springy in their movements,you,11,1.0,1.0,0.975
+arctic_b0273,ZHAA,Arabic,,,Then it was that a strange thing happened, you,then it was that a strange thing happened,you,8,1.0,1.0,1.0
+arctic_b0104,ZHAA,Arabic,,,Shooting pains passed like flashes of electricity through his body, you,shooting pains passed like flashes of electricity through his body,you,10,1.0,1.0,0.9777777777777777
+arctic_a0319,ZHAA,Arabic,,,And the Edinburgh Evening News says with editorial gloom, you,and the edinburgh evening news says with editorial gloom,you,9,1.0,1.0,0.9743589743589743
+arctic_a0441,ZHAA,Arabic,,,Violent life and athletic sports had never appealed to me, you,violent life and athletic sports had never appealed to me,you,10,1.0,1.0,0.9761904761904762
+arctic_b0097,ZHAA,Arabic,,,Besides that noise makes me deaf, you,besides that noise makes me deaf,you,6,1.0,1.0,1.0
+arctic_a0190,ZHAA,Arabic,,,Next to them the Canada jays were most persistent, you,next to them the canada jays were most persistent,you,9,1.0,1.0,0.9722222222222222
+arctic_b0186,ZHAA,Arabic,,,I can't go elsewhere by your own account, you,i cant go elsewhere by your own account,you,8,1.0,1.0,0.96
+arctic_a0199,ZHAA,Arabic,,,Thus had the raw wilderness prepared him for this day, you,thus had the raw wilderness prepared him for this day,you,10,1.0,1.0,1.0
+arctic_b0143,ZHAA,Arabic,,,It took him half an hour to reach the edge of it, you,it took him half an hour to reach the edge of it,you,12,1.0,1.0,0.9642857142857143
+arctic_b0112,ZHAA,Arabic,,,Jeanne and Pierre both gazed toward the great rock, you,jeanne and pierre both gazed toward the great rock,you,9,1.0,1.0,1.0
+arctic_a0542,ZHAA,Arabic,,,Without a doubt some of them have dinner engagements, you,without a doubt some of them have dinner engagements,you,9,1.0,1.0,1.0
+arctic_a0089,ZHAA,Arabic,,,The night glow was treacherous to shoot by, you,the night glow was treacherous to shoot by,you,8,1.0,1.0,0.96
+arctic_b0348,ZHAA,Arabic,,,Would you be satisfied with that one hundredth part of me, you,would you be satisfied with that one hundredth part of me,you,11,0.9090909090909091,0.9090909090909091,0.95
+arctic_b0506,ZHAA,Arabic,,,It would help to tide me along until I got steady employment, you,it would help to tide me along until i got steady employment,you,12,1.0,1.0,0.9767441860465116
+arctic_a0256,ZHAA,Arabic,,,See the length of the body and that elongated neck, you,see the length of the body and that elongated neck,you,10,1.0,1.0,1.0
+arctic_b0183,ZHAA,Arabic,,,No I did not fall among thieves, you,no i did not fall among thieves,you,7,1.0,1.0,1.0
+arctic_a0162,ZHAA,Arabic,,,That's the sub foreman explained Thorpe, you,thats the sub foreman explained thorpe,you,6,1.0,1.0,1.0
+arctic_b0538,ZHAA,Arabic,,,At the best they were necessary accessories, you,at the best they were necessary accessories,you,7,1.0,1.0,1.0
+arctic_b0008,ZHAA,Arabic,,,Burke himself had criticized it because of the smile, you,burke himself had criticized it because of the smile,you,9,1.0,1.0,1.0
+arctic_b0148,ZHAA,Arabic,,,The Indian even poked his stick into the thick ground spruce, you,the indian even poked his stick into the thick ground spruce,you,11,1.0,1.0,0.9761904761904762
+arctic_a0394,ZHAA,Arabic,,,It's the strap hangers that'll keep us from going under, you,its the strap hangers thatll keep us from going under,you,10,1.0,1.0,1.0
+arctic_a0143,ZHAA,Arabic,,,Ah I had forgotten he exclaimed, you,ah i had forgotten he exclaimed,you,6,1.0,1.0,1.0
+arctic_a0094,ZHAA,Arabic,,,He had barely entered this when he saw the glow of a fire, you,he had barely entered this when he saw the glow of a fire,you,13,1.0,1.0,1.0
+arctic_a0467,ZHAA,Arabic,,,And so early in the voyage too, you,and so early in the voyage too,you,7,1.0,1.0,0.9444444444444444
+arctic_a0593,ZHAA,Arabic,,,She'd make a good wife for the cashier, you,shed make a good wife for the cashier,you,8,1.0,1.0,1.0
+arctic_a0164,ZHAA,Arabic,,,He came first a year ago and revealed himself to Jeanne, you,he came first a year ago and revealed himself to jeanne,you,11,1.0,1.0,0.9459459459459459
+arctic_a0457,BDL,English,,,What I saw I could not at first believe., you,what i saw i could not at first believe,you,9,1.0,1.0,1.0
+arctic_a0103,BDL,English,,,But there came no promise from the bow of the canoe., you,but there came no promise from the bow of the canoe,you,11,1.0,1.0,0.9696969696969697
+arctic_b0534,BDL,English,,,"I'll tell you, the librarian said with a brightening face.", you,ill tell you the librarian said with a brightening face,you,10,0.9,0.9,0.9444444444444444
+arctic_b0411,BDL,English,,,"He gave no reason, but his motive was obvious enough.", you,he gave no reason but his motive was obvious enough,you,10,1.0,1.0,1.0
+arctic_b0322,BDL,English,,,Their supply of grub was gone., you,their supply of grub was gone,you,6,1.0,1.0,1.0
+arctic_a0572,BDL,English,,,I never saw anything like her in my life., you,i never saw anything like her in my life,you,9,1.0,1.0,1.0
+arctic_a0420,BDL,English,,,When I came to I was waving my hat and murmuring ecstatically., you,when i came to i was waving my hat and murmuring ecstatically,you,12,1.0,1.0,0.9761904761904762
+arctic_b0509,BDL,English,,,He had fulfilled his duty and paid properly., you,he had fulfilled his duty and paid properly,you,8,1.0,1.0,0.96875
+arctic_a0357,BDL,English,,,"A month passed by, and Bonanza Creek remained quiet.", you,a month passed by and bonanza creek remained quiet,you,9,1.0,1.0,1.0
+arctic_b0004,BDL,English,,,When I can't see beauty in woman I want to die., you,when i cant see beauty in woman i want to die,you,11,1.0,1.0,0.9354838709677419
+arctic_a0131,BDL,English,,,Providence had delivered him through the maelstrom., you,providence had delivered him through the maelstrom,you,7,1.0,1.0,0.9714285714285714
+arctic_a0123,BDL,English,,,She had died from cold and starvation., you,she had died from cold and starvation,you,7,1.0,1.0,1.0
+arctic_a0384,BDL,English,,,The farmer works the soil and produces grain., you,the farmer works the soil and produces grain,you,8,1.0,1.0,0.967741935483871
+arctic_b0303,BDL,English,,,Here we allow our solicitors to look after our legal work., you,here we allow our solicitors to look after our legal work,you,11,1.0,1.0,0.9736842105263158
+arctic_b0360,BDL,English,,,This state of mind comes of an undue prominence of the ego., you,this state of mind comes of an undue prominence of the ego,you,12,1.0,1.0,0.975609756097561
+arctic_b0345,BDL,English,,,"Daylight made no answer, and the door closed behind him.", you,daylight made no answer and the door closed behind him,you,10,1.0,1.0,1.0
+arctic_a0109,BDL,English,,,Do you know that you are shaking my confidence in you., you,do you know that you are shaking my confidence in you,you,11,0.9090909090909091,0.9090909090909091,0.9393939393939394
+arctic_b0222,BDL,English,,,"He was the leader, and Tudor was his lieutenant.", you,he was the leader and tudor was his lieutenant,you,9,1.0,1.0,0.96875
+arctic_b0508,BDL,English,,,In his anxiety and solicitude and love they did not count., you,in his anxiety and solicitude and love they did not count,you,11,1.0,1.0,0.9761904761904762
+arctic_a0587,BDL,English,,,He had comparatively no advantages at first., you,he had comparatively no advantages at first,you,7,1.0,1.0,1.0
+arctic_b0310,BDL,English,,,"A little treatment, massage, with some help from the doctor.", you,a little treatment massage with some help from the doctor,you,10,1.0,1.0,1.0
+arctic_b0115,BDL,English,,,For two hours not a word passed between them., you,for two hours not a word passed between them,you,9,1.0,1.0,0.9642857142857143
+arctic_a0008,BDL,English,,,"Gad, your letter came just in time.", you,gad your letter came just in time,you,7,1.0,1.0,0.9545454545454546
+arctic_a0027,BDL,English,,,To my surprise he began to show actual enthusiasm in my favor., you,to my surprise he began to show actual enthusiasm in my favor,you,12,1.0,1.0,0.9782608695652174
+arctic_b0061,BDL,English,,,"Something about it seemed to fascinate him, to challenge his presence.", you,something about it seemed to fascinate him to challenge his presence,you,11,1.0,1.0,0.9782608695652174
+arctic_b0007,BDL,English,,,Hear the Indian dogs wailing down at Churchill., you,hear the indian dogs wailing down at churchill,you,8,1.0,1.0,1.0
+arctic_a0262,BDL,English,,,They wouldn't be sweeping a big vessel like the Martha., you,they wouldnt be sweeping a big vessel like the martha,you,10,1.0,1.0,1.0
+arctic_a0007,BDL,English,,,And you always want to see it in the superlative degree., you,and you always want to see it in the superlative degree,you,11,0.9090909090909091,0.9090909090909091,0.9473684210526315
+arctic_b0044,BDL,English,,,For a few moments he ate in silence., you,for a few moments he ate in silence,you,8,1.0,1.0,0.9230769230769231
+arctic_b0289,BDL,English,,,At first his progress was slow and erratic., you,at first his progress was slow and erratic,you,8,1.0,1.0,1.0
+arctic_a0247,BDL,English,,,They ought to pass here some time today., you,they ought to pass here some time today,you,8,1.0,1.0,0.9545454545454546
+arctic_a0419,BDL,English,,,The Portuguese boy passed the Hawaiian., you,the portuguese boy passed the hawaiian,you,6,1.0,1.0,1.0
+arctic_a0380,BDL,English,,,But in the canyons water was plentiful and also a luxuriant forest growth., you,but in the canyons water was plentiful and also a luxuriant forest growth,you,13,1.0,1.0,0.9824561403508771
+arctic_a0425,BDL,English,,,Otherwise no restriction is put upon their seafaring., you,otherwise no restriction is put upon their seafaring,you,8,1.0,1.0,1.0
+arctic_a0397,BDL,English,,,"Call me that again, he murmured ecstatically.", you,call me that again he murmured ecstatically,you,7,1.0,1.0,1.0
+arctic_a0339,BDL,English,,,"They obeyed him, and went here and there at his commands.", you,they obeyed him and went here and there at his commands,you,11,1.0,1.0,1.0
+arctic_a0277,BDL,English,,,"McCoy found a stifling, poisonous atmosphere in the pent cabin.", you,mccoy found a stifling poisonous atmosphere in the pent cabin,you,10,1.0,1.0,1.0
+arctic_b0491,BDL,English,,,"Jacob Brinker, who was his roadmate, brought the news.", you,jacob brinker who was his roadmate brought the news,you,9,1.0,1.0,0.9705882352941176
+arctic_a0178,BDL,English,,,Every bone in her aged body seemed broken or dislocated., you,every bone in her aged body seemed broken or dislocated,you,10,1.0,1.0,1.0
+arctic_b0157,BDL,English,,,In the crib the baby sat up and began to prattle., you,in the crib the baby sat up and began to prattle,you,11,1.0,1.0,0.9714285714285714
+arctic_b0472,BDL,English,,,Ernest saw in the affair the most sinister import., you,ernest saw in the affair the most sinister import,you,9,1.0,1.0,1.0
+arctic_a0512,BDL,English,,,"No, it is a palace, wherein there are many servants.", you,no it is a palace wherein there are many servants,you,10,1.0,1.0,1.0
+arctic_a0419,BDL,English,,,The Portuguese boy passed the Hawaiian., you,the portuguese boy passed the hawaiian,you,6,1.0,1.0,1.0
+arctic_a0323,BDL,English,,,He considered the victory already his and stepped forward to the meat., you,he considered the victory already his and stepped forward to the meat,you,12,1.0,1.0,0.9791666666666666
+arctic_b0537,BDL,English,,,But she had become an automaton., you,but she had become an automaton,you,6,1.0,1.0,1.0
+arctic_a0069,BDL,English,,,It was his intention to return to Eileen and her father., you,it was his intention to return to eileen and her father,you,11,1.0,1.0,0.9736842105263158
+arctic_a0350,BDL,English,,,Is that Pat Hanrahan's mug looking hungry and willing., you,is that pat hanrahans mug looking hungry and willing,you,9,1.0,1.0,1.0
+arctic_b0195,BDL,English,,,Nobody knows how the natives got them., you,nobody knows how the natives got them,you,7,1.0,1.0,1.0
+arctic_a0285,BDL,English,,,But what they want with your toothbrush is more than I can imagine., you,but what they want with your toothbrush is more than i can imagine,you,13,1.0,1.0,0.9534883720930233
+arctic_a0188,BDL,English,,,Two gigantic owls were tearing at the carcass., you,two gigantic owls were tearing at the carcass,you,8,1.0,1.0,0.9666666666666667

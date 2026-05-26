@@ -196,6 +196,59 @@ def load_decoder(decoder: str, project_root: Path,
 # Steering methods
 # ---------------------------------------------------------------------------
 
+def run_position_fixed(mapping: dict, ref_data: dict, decode: Callable) -> list[dict]:
+    """Position blend of speech frames [0:T_max] only; L2 padding for tail.
+
+    T_max = max(T_nat, T_l2) — covers the full speech region of both speakers.
+    Tail [T_max:] is always L2 padding (no interpolation).
+    Compared to run_position (full 1500-frame blend), this isolates whether fixing
+    the tail to on-manifold L2 content improves WER. Requires speech_end_frame in mapping.
+    """
+    print("[run_steering] Running fixed-tail position-based steering...")
+    total = sum(_n_l2(l1d) * len(ALPHA_VALUES) for l1d in mapping.values())
+    rows  = []
+
+    with tqdm(total=total, unit="decode") as pbar:
+        for prompt_id, l1d in mapping.items():
+            eng_info = l1d["English"]
+            eng_end  = eng_info.get("speech_end_frame")
+            if not eng_end or not Path(eng_info["path"]).exists():
+                pbar.update(_n_l2(l1d) * len(ALPHA_VALUES)); continue
+            try:
+                eng_full = load_checkpoint(eng_info["path"])
+            except Exception:
+                pbar.update(_n_l2(l1d) * len(ALPHA_VALUES)); continue
+
+            for l1, info in l1d.items():
+                if l1 == "English":
+                    continue
+                l2_end = info.get("speech_end_frame")
+                ref    = ref_data.get((prompt_id, info["speaker"]))
+                if not l2_end or ref is None or not Path(info["path"]).exists():
+                    pbar.update(len(ALPHA_VALUES)); continue
+                try:
+                    l2_full = load_checkpoint(info["path"])
+                except Exception:
+                    pbar.update(len(ALPHA_VALUES)); continue
+
+                t_max    = max(l2_end, eng_end)
+                norm_ref = norm(ref)
+                for alpha in ALPHA_VALUES:
+                    try:
+                        speech = ((1 - alpha) * l2_full[:t_max]
+                                  + alpha * eng_full[:t_max]).astype(np.float32)
+                        padded = np.vstack([speech, l2_full[t_max:].astype(np.float32)])
+                        pred   = decode(padded)
+                        rows.append({"prompt_id": prompt_id, "L1": l1,
+                                     "speaker": info["speaker"], "alpha": alpha,
+                                     "wer": jiwer.wer(norm_ref, norm(pred))})
+                    except Exception as e:
+                        print(f"  [warn] {prompt_id}/{l1}/alpha={alpha}: {e}")
+                    pbar.update(1)
+
+    return rows
+
+
 def run_position(mapping: dict, ref_data: dict, decode: Callable) -> list[dict]:
     """Frame-by-frame blend of full 1500-frame sequences. Tail is implicitly interpolated."""
     print("[run_steering] Running position-based steering...")
@@ -368,10 +421,11 @@ def run_dtw_full(mapping: dict, ref_data: dict, decode: Callable,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--decoder",      required=True, choices=["whisper", "whisfusion"])
-    parser.add_argument("--method",       required=True, choices=["position", "dtw", "full_dtw"])
+    parser.add_argument("--method",       required=True, choices=["position", "position_fixed", "dtw", "full_dtw"])
     parser.add_argument("--tail",         default="l2",  choices=["l2", "english", "interpolate"],
                         help="Tail/padding strategy for --method dtw only. "
-                             "Ignored for position (blends all 1500 frames) and "
+                             "Ignored for position (blends all 1500 frames), "
+                             "position_fixed (L2 tail after T_max), and "
                              "full_dtw (DTW across all 1500 frames; no tail needed).")
     parser.add_argument("--window",       type=int, default=None,
                         help="Sakoe-Chiba band for DTW (frames). Strongly recommended for "
@@ -400,6 +454,8 @@ def main():
         cache_path = out_dir / f"{args.decoder}_dtw_{args.tail}_steering.csv"
     elif args.method == "full_dtw":
         cache_path = out_dir / f"{args.decoder}_full_dtw_steering.csv"
+    elif args.method == "position_fixed":
+        cache_path = out_dir / f"{args.decoder}_position_fixed_steering.csv"
     else:
         cache_path = out_dir / f"{args.decoder}_position_steering.csv"
 
@@ -420,6 +476,8 @@ def main():
 
     if args.method == "position":
         rows = run_position(mapping, ref_data, decode)
+    elif args.method == "position_fixed":
+        rows = run_position_fixed(mapping, ref_data, decode)
     elif args.method == "full_dtw":
         rows = run_dtw_full(mapping, ref_data, decode, window=args.window)
     else:

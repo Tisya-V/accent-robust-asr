@@ -51,11 +51,11 @@ class BridgeDataset(Dataset):
         print(f"[BridgeDataset] {len(self.pairs)} pairs ({missing} missing encoder states)")
 
         self._dtw_paths: dict = {}
-        if alignment == "dtw":
+        if alignment.startswith("dtw"):
             pkl = Path(dtw_cache)
             if not pkl.is_absolute():
                 # Resolve relative to project root (two levels up from this file's package)
-                pkl = Path(__file__).resolve().parents[4] / dtw_cache
+                pkl = Path(__file__).resolve().parents[3] / dtw_cache
             if not pkl.exists():
                 raise RuntimeError(
                     f"DTW cache not found at {pkl} — run precompute_dtw.py first."
@@ -116,7 +116,7 @@ class BridgeDataset(Dataset):
         l2_speech_end  = pair["l2_speech_end_frame"]
         nat_speech_end = pair["nat_speech_end_frame"]
 
-        if self.alignment == "dtw":
+        if self.alignment.startswith("dtw"):
             key      = (pair["l2_encoder_state_path"], pair["nat_encoder_state_path"])
             path_arr = self._dtw_paths[key]  # [P, 2] int16 — in-memory dict lookup
             return z_acc, z_nat, l2_speech_end, nat_speech_end, path_arr

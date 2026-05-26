@@ -77,13 +77,29 @@ def load_bridge_model(
     ckpt_path: str | Path,
     device: torch.device,
 ) -> torch.nn.Module:
-    """Load trained BridgeTransformer from checkpoint."""
+    """Load trained BridgeTransformer from checkpoint, reading architecture from config.json."""
+    import json
     from .model import BridgeTransformer
 
+    ckpt_path = Path(ckpt_path)
+    config_path = ckpt_path.parent / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"config.json not found at {config_path} — needed to reconstruct model architecture")
+
+    with open(config_path) as f:
+        cfg = json.load(f)
+
+    model = BridgeTransformer(
+        d_model          = cfg.get("d_model", 256),
+        n_layers         = cfg.get("n_layers", 4),
+        n_heads          = cfg.get("n_heads", 8),
+        dim_feedforward  = cfg.get("dim_feedforward", 1024),
+        cond_acc         = cfg.get("cond_acc", False),
+        parameterization = cfg.get("parameterization", "eps"),
+    )
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    model = BridgeTransformer(d_model=768, n_layers=4, n_heads=8, dim_feedforward=2048)
     model.load_state_dict(ckpt["model_state_dict"])
-    model = model.to(device)
+    model = model.to(device, dtype=torch.bfloat16)
     model.eval()
     return model
 
@@ -103,14 +119,17 @@ def bridge_inference_single(
     n_steps: int = 20,
     sigma_max: float = 0.5,
     device: torch.device = torch.device("cpu"),
+    parameterization: str = "eps",
+    speech_end: Optional[int] = None,
 ) -> torch.Tensor:
     """Run bridge inference on a single [1500, 768] latent."""
     from .diffusion import bridge_inference
 
-    z_acc = z_acc.to(device).unsqueeze(0)  # [1, 1500, 768]
+    z_acc = z_acc.to(device=device, dtype=torch.bfloat16).unsqueeze(0)  # [1, 1500, 768]
     with torch.no_grad():
-        z_nat_hat = bridge_inference(bridge, z_acc, n_steps=n_steps, sigma_max=sigma_max)
-    return z_nat_hat.squeeze(0).cpu()  # [1500, 768]
+        z_nat_hat = bridge_inference(bridge, z_acc, n_steps=n_steps, sigma_max=sigma_max,
+                                     parameterization=parameterization, speech_end=speech_end)
+    return z_nat_hat.squeeze(0).float().cpu()  # [1500, 768]
 
 
 def transcribe_with_bridge(
@@ -120,6 +139,8 @@ def transcribe_with_bridge(
     decoder_model,
     device: torch.device,
     decoder_type: str = "whisper",
+    n_steps: int = 20,
+    sigma_max: float = 0.5,
 ) -> list[str]:
     """
     Transcribe utterances using bridge-corrected encoder states.
@@ -131,6 +152,8 @@ def transcribe_with_bridge(
         decoder_model: Decoder model (Whisper or Whisfusion)
         device: Device to run on
         decoder_type: "whisper" or "whisfusion"
+        n_steps: Number of ODE steps for bridge inference
+        sigma_max: Bridge noise scale — must match the value used during training
 
     Returns:
         List of transcriptions
@@ -161,8 +184,13 @@ def transcribe_with_bridge(
             predictions.append("")
             continue
 
-        # Run bridge inference
-        z_nat_hat = bridge_inference_single(bridge, z_acc, device=device)
+        # Run bridge inference — stitch original L2 silence back for frames beyond speech_end
+        parameterization = getattr(bridge, "parameterization", "eps")
+        speech_end = utt.get("speech_end_frame")
+        z_nat_hat = bridge_inference_single(bridge, z_acc, device=device,
+                                            n_steps=n_steps, sigma_max=sigma_max,
+                                            parameterization=parameterization,
+                                            speech_end=speech_end)
 
         # Decode with bridge-corrected latents
         if decoder_type == "whisper":
@@ -221,7 +249,10 @@ def evaluate_bridge(
     decoder: str = "whisper",
     output_dir: str = "results/bridge_eval",
     n_steps: int = 20,
-    sigma_max: float = 0.5,
+    sigma_max: float | None = None,
+    mapping_path: str = "src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json",
+    max_utts_per_speaker: int | None = None,
+    output_file: str = "bridge_predictions.csv",
 ) -> None:
     """
     Evaluate bridge model on test speakers.
@@ -231,14 +262,26 @@ def evaluate_bridge(
         decoder: "whisper" or "whisfusion"
         output_dir: Where to save results CSV
         n_steps: Number of ODE steps for bridge inference
-        sigma_max: Noise schedule parameter
+        sigma_max: Noise schedule parameter — if None, read from config.json next to checkpoint
+        mapping_path: Path to mapping_test.json (encoder states located via TEST_DATA_DIR env var)
+        max_utts_per_speaker: If set, stratified subsample to this many utterances per speaker
     """
+    import json as _json
+
+    bridge_ckpt = Path(bridge_ckpt)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Eval] Device: {device}")
 
     # Load bridge
     print(f"[Eval] Loading bridge from {bridge_ckpt}")
     bridge = load_bridge_model(bridge_ckpt, device)
+
+    # Read sigma_max from config if not supplied
+    if sigma_max is None:
+        config_path = bridge_ckpt.parent / "config.json"
+        cfg = _json.loads(config_path.read_text()) if config_path.exists() else {}
+        sigma_max = cfg.get("sigma_max", 0.5)
+        print(f"[Eval] sigma_max={sigma_max} (from config.json)")
 
     # Load decoder
     print(f"[Eval] Loading {decoder} decoder...")
@@ -251,9 +294,24 @@ def evaluate_bridge(
     else:
         raise ValueError(f"Unknown decoder: {decoder}")
 
-    # Load test utterances
-    print(f"[Eval] Loading test utterances...")
-    test_utts = load_test_utterances()
+    # Load test utterances from mapping_test.json — encoder states resolved via TEST_DATA_DIR
+    print(f"[Eval] Loading test utterances from {mapping_path}")
+    with open(mapping_path) as f:
+        test_utts = _json.load(f)
+    for u in test_utts:
+        u.setdefault("wav_path", "")  # not needed for eval, only for CSV output
+
+    if max_utts_per_speaker is not None:
+        import random as _random
+        by_speaker: dict = {}
+        for u in test_utts:
+            by_speaker.setdefault(u["speaker"], []).append(u)
+        test_utts = []
+        for spk, utts in by_speaker.items():
+            _random.seed(42)
+            test_utts.extend(_random.sample(utts, min(max_utts_per_speaker, len(utts))))
+        print(f"  Subsampled to {max_utts_per_speaker} utts/speaker")
+
     print(f"  {len(test_utts)} test utterances from {len(set(u['speaker'] for u in test_utts))} speakers")
 
     # Run inference
@@ -265,6 +323,8 @@ def evaluate_bridge(
         decoder_model,
         device,
         decoder_type=decoder,
+        n_steps=n_steps,
+        sigma_max=sigma_max,
     )
 
     # Build results
@@ -273,7 +333,7 @@ def evaluate_bridge(
     # Save
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / "bridge_predictions.csv"
+    out_path = output_dir / output_file
     results.to_csv(out_path, index=False)
 
     # Print summary
@@ -336,8 +396,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sigma_max",
         type=float,
-        default=0.5,
-        help="Noise schedule parameter",
+        default=None,
+        help="Noise schedule parameter — defaults to value in config.json next to checkpoint",
+    )
+    parser.add_argument(
+        "--mapping_path",
+        type=str,
+        default="src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json",
+        help="Path to mapping_test.json",
+    )
+    parser.add_argument(
+        "--max_utts_per_speaker",
+        type=int,
+        default=None,
+        help="Stratified subsample to this many utterances per speaker (for quick eval)",
+    )
+    parser.add_argument(
+        "--output_file",
+        type=str,
+        default="bridge_predictions.csv",
+        help="Filename for the output CSV within output_dir",
     )
 
     args = parser.parse_args()
@@ -347,4 +425,7 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         n_steps=args.n_steps,
         sigma_max=args.sigma_max,
+        mapping_path=args.mapping_path,
+        max_utts_per_speaker=args.max_utts_per_speaker,
+        output_file=args.output_file,
     )

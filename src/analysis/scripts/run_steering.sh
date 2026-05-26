@@ -19,16 +19,16 @@ mkdir -p logs
 
 # whisper_position already cached — skipped automatically by run_steering.py
 
-for TAIL in l2 english interpolate; do
-    echo "[Job] whisper dtw tail=${TAIL}"
-    python src/analysis/run_steering.py \
-        --decoder whisper --method dtw --tail "${TAIL}" \
-        --num_prompts 100 --out_dir results/e2_steering
-done
+# for TAIL in l2 english interpolate; do
+#     echo "[Job] whisper dtw tail=${TAIL}"
+#     python src/analysis/run_steering.py \
+#         --decoder whisper --method dtw --tail "${TAIL}" \
+#         --num_prompts 100 --out_dir results/e2_steering
+# done
 
-echo "[Job] whisper full_dtw"
+echo "[Job] whisper position_fixed"
 python src/analysis/run_steering.py \
-    --decoder whisper --method full_dtw --window 200 \
+    --decoder whisper --method position_fixed \
     --num_prompts 30 --out_dir results/e2_steering
 
 echo "[Job] Done at $(date)"

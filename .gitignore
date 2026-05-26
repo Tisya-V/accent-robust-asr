@@ -42,3 +42,5 @@ src/experiments/exp2_latent_diffusion_bridge/dtw_cache/
 .claude/
 claude-files/
 .worktrees/   
+I2SB/
+*.png
