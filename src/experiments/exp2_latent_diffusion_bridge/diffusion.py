@@ -207,6 +207,90 @@ def bridge_inference(
     return z_nat_hat
 
 
+def bridge_inference_dtw(
+    model: nn.Module,
+    z_acc: torch.Tensor,
+    T_l2: int,
+    T_eng: int,
+    n_steps: int = 20,
+    sigma_max: float = 2.0,
+    parameterization: str = "eps",
+) -> torch.Tensor:
+    """
+    DTW-aware reverse diffusion with N(t) mask schedule.
+
+    At each ODE step the active speech region is [0:N(t)] where
+      N(t) = round(t·T_l2 + (1-t)·T_eng)
+    Frames [N(t):] are held at on-manifold silence (z_acc[T_l2] repeated)
+    so the bridge never operates on padding frames.
+
+    T_l2 and T_eng are scalars (per-utterance inference).
+    T_eng should come from the TEngPredictor; T_l2 from the mapping JSON.
+
+    Args:
+        model:   BridgeTransformer
+        z_acc:   [B, 1500, 768] accented encoder states
+        T_l2:    accented speech end frame
+        T_eng:   predicted native speech end frame (from TEngPredictor)
+        n_steps: ODE steps
+        sigma_max: must match training value (DTW: 2.0)
+    """
+    B, L, D = z_acc.shape
+    device, dtype = z_acc.device, z_acc.dtype
+
+    # Crop model inputs to match training distribution — model only saw frames
+    # up to max(T_l2, T_eng) during training; frames beyond are OOD in z_acc.
+    inf_len = max(T_l2, T_eng) + 1
+    z_acc_crop = z_acc[:, :inf_len, :]
+
+    t_schedule = torch.linspace(1.0, 0.0, n_steps + 1, device=device, dtype=dtype)
+    z_t = z_acc.clone()
+
+    def _sil_src(N_t: int) -> torch.Tensor:
+        """Indices into z_acc for the silence tail starting at N_t.
+        Mirrors training: tail position k → z_acc[clamp(T_l2 + k, max=L-1)]."""
+        return torch.arange(T_l2, T_l2 + (L - N_t), device=device).clamp(max=L - 1)
+
+    def _apply_mask(z: torch.Tensor, t: float) -> torch.Tensor:
+        N_t = max(1, round(float(t) * T_l2 + (1 - float(t)) * T_eng))
+        N_t = min(N_t, L)
+        z[:, N_t:, :] = z_acc[:, _sil_src(N_t), :]
+        return z
+
+    # Initialise: at t=1 the tail [T_l2:] is already silence in z_acc, but
+    # apply mask to be explicit
+    z_t = _apply_mask(z_t, t_schedule[0].item())
+
+    model.eval()
+    with torch.no_grad():
+        for i in range(n_steps):
+            t_cur  = t_schedule[i]
+            t_next = t_schedule[i + 1]
+
+            t_cur_batch = torch.full((B,), t_cur, device=device, dtype=dtype)
+
+            if parameterization == "x0":
+                z_nat_hat_crop = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop)
+            else:
+                eps_pred = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop)
+                sigma_forward_cur = sigma_max * torch.sqrt(torch.clamp(t_cur, min=1e-5))
+                z_nat_hat_crop = z_t[:, :inf_len, :] - sigma_forward_cur * eps_pred
+
+            # Pad model output back to full L before ODE update and masking
+            z_nat_hat = z_t.clone()
+            z_nat_hat[:, :inf_len, :] = z_nat_hat_crop
+
+            if i == n_steps - 1:
+                break
+
+            z_t = (1 - t_next / t_cur) * z_nat_hat + (t_next / t_cur) * z_t
+            z_t = _apply_mask(z_t, t_next.item())
+
+    # Enforce silence from T_eng onwards in the final output
+    z_nat_hat[:, T_eng:, :] = z_acc[:, _sil_src(T_eng), :]
+    return z_nat_hat
+
+
 # ---------------------------------------------------------------------------
 # DTW-aligned forward process
 # ---------------------------------------------------------------------------
@@ -322,6 +406,13 @@ def bridge_loss_dtw(
     device    = z_nat.device
     max_P     = path_tensor.shape[1]
 
+    # Crop to active region — frames beyond max(T_l2, T_eng) in this batch are
+    # frozen silence in z_t and trivial offset-mismatch in z_nat_canon.
+    # Reduces attention from O(1500²) to O(max_len²); p99 max_len ≈ 380.
+    max_len = int(max(l2_speech_ends.max(), nat_speech_ends.max()).item()) + 1
+    z_nat   = z_nat[:, :max_len, :]
+    z_acc   = z_acc[:, :max_len, :]
+
     # ── 1. Sample t per item ──────────────────────────────────────────────────
     t_batch = torch.rand(B, device=device, dtype=torch.float32)  # [B]
 
@@ -360,10 +451,10 @@ def bridge_loss_dtw(
     # ── 7. Tail (silence) frames: alpha-blend L2 and native silence ───────────
     # For item i: silence starts at T_l2_i (L2) / T_eng_i (nat) and runs to 1499.
     # Gather up to max_need = 1500 - min(N) frames; items with larger N use a prefix.
-    max_need   = 1500 - int(N_batch.min())
+    max_need   = max_len - int(N_batch.min())
     tail_range = torch.arange(max_need, device=device).unsqueeze(0)                         # [1, max_need]
-    tail_i_acc = (T_l2.long().unsqueeze(1)  + tail_range).clamp(0, 1499)                    # [B, max_need]
-    tail_i_nat = (T_eng.long().unsqueeze(1) + tail_range).clamp(0, 1499)                    # [B, max_need]
+    tail_i_acc = (T_l2.long().unsqueeze(1)  + tail_range).clamp(0, max_len - 1)             # [B, max_need]
+    tail_i_nat = (T_eng.long().unsqueeze(1) + tail_range).clamp(0, max_len - 1)             # [B, max_need]
     tail_acc   = torch.gather(z_acc, 1, tail_i_acc.unsqueeze(-1).expand(-1, -1, D))         # [B, max_need, D]
     tail_nat   = torch.gather(z_nat, 1, tail_i_nat.unsqueeze(-1).expand(-1, -1, D))         # [B, max_need, D]
     if dtw_tail == "l2":
@@ -373,9 +464,9 @@ def bridge_loss_dtw(
     else:  # interp
         tail = (1 - t_view) * tail_nat + t_view * tail_acc                                  # [B, max_need, D]
 
-    # ── 8. Assemble [B, 1500, D]: speech frames 0..N_i-1, tail N_i..1499 ─────
-    pos          = torch.arange(1500, device=device).unsqueeze(0).expand(B, -1)              # [B, 1500]
-    speech_mask  = (pos < N_batch.unsqueeze(1))                                               # [B, 1500]
+    # ── 8. Assemble [B, max_len, D]: speech frames 0..N_i-1, tail N_i..max_len-1 ─
+    pos          = torch.arange(max_len, device=device).unsqueeze(0).expand(B, -1)            # [B, max_len]
+    speech_mask  = (pos < N_batch.unsqueeze(1))                                               # [B, max_len]
 
     speech_pos   = pos.clamp(0, max_N - 1)
     speech_out   = torch.gather(speech, 1, speech_pos.unsqueeze(-1).expand(-1, -1, D))       # [B, 1500, D]
@@ -387,15 +478,15 @@ def bridge_loss_dtw(
 
     z_clean = speech_out + tail_out                                                            # [B, 1500, D]
 
-    # ── 9. Bridge noise σ_bridge(t)·ε, σ_bridge(t) = sigma_max·√(t(1-t)) ───────
+    # ── 9. Bridge noise σ_bridge(t)·ε — only applied to speech frames [0:N(t)] ──
     eps      = torch.randn_like(z_clean)
     sigma_br = (sigma_max * torch.sqrt((t_batch * (1 - t_batch)).clamp(min=1e-5))).view(B, 1, 1)
-    z_t      = z_clean + sigma_br * eps
+    z_t      = z_clean + sigma_br * eps * speech_mask.unsqueeze(-1)
 
-    # ── 10. z_nat_canon: z_nat[:T_nat] || z_acc[T_l2:] tiled to [T_nat:1500] ─
-    tail_mask   = nat_speech_ends.unsqueeze(1) <= torch.arange(1500, device=device).unsqueeze(0)  # [B, 1500]
-    tail_offset = torch.arange(1500, device=device).unsqueeze(0) - nat_speech_ends.unsqueeze(1)   # [B, 1500]
-    tail_src    = (l2_speech_ends.unsqueeze(1) + tail_offset).clamp(0, 1499)                      # [B, 1500]
+    # ── 10. z_nat_canon: z_nat[:T_nat] || z_acc[T_l2:] tiled to [T_nat:max_len] ─
+    tail_mask   = nat_speech_ends.unsqueeze(1) <= torch.arange(max_len, device=device).unsqueeze(0)  # [B, max_len]
+    tail_offset = torch.arange(max_len, device=device).unsqueeze(0) - nat_speech_ends.unsqueeze(1)   # [B, max_len]
+    tail_src    = (l2_speech_ends.unsqueeze(1) + tail_offset).clamp(0, max_len - 1)                  # [B, max_len]
     z_acc_tail  = torch.gather(z_acc, 1, tail_src.unsqueeze(-1).expand(-1, -1, D))                # [B, 1500, D]
     z_nat_canon = torch.where(tail_mask.unsqueeze(-1), z_acc_tail, z_nat)                         # [B, 1500, D]
 
@@ -409,7 +500,7 @@ def bridge_loss_dtw(
         pred   = model(z_t, t_batch, z_acc)
 
     diff_sq   = (pred - target).pow(2)
-    sp_mask_f = (~tail_mask).float().unsqueeze(-1)
+    sp_mask_f = (speech_mask & ~tail_mask).float().unsqueeze(-1)  # [0:min(N(t),T_eng)] only
     tl_mask_f = tail_mask.float().unsqueeze(-1)
     D = pred.shape[-1]
     speech_loss = (diff_sq * sp_mask_f).sum() / (sp_mask_f.sum() * D)

@@ -26,20 +26,21 @@ echo "Track: tail -f ${RUNTIME_LOG}"
 echo "=========================================="
 
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
-    --alignment    dtw \
+    --alignment       dtw \
     --parameterization x0 \
-    --out_dir      models/bridge_dtw_x0 \
-    --d_model       768 \
+    --cond_acc            \
+    --out_dir         models/bridge_dtw_x0_cond_lowsigma \
+    --d_model         768 \
     --dim_feedforward 3072 \
-    --n_heads 12 \
-    --n_epochs    15 \
-    --batch_size   64 \
-    --lr           1e-4 \
-    --weight_decay 1e-4 \
-    --sigma_max    1.5 \
-    --num_workers  6 \
-    --patience     5 \
-    --tail_weight  0.3 \
-    --notes        "x0-prediction, DTW alpha-timeline alignment, sigma_max=1.5, tail_weight=0.3, fixed ODE step, fixed l2 padding, d_model=768"
+    --n_heads         12 \
+    --n_epochs        15 \
+    --batch_size      64 \
+    --lr              1e-4 \
+    --weight_decay    1e-4 \
+    --sigma_max       0.3 \
+    --num_workers     6 \
+    --patience        5 \
+    --tail_weight     0.0 \
+    --notes           "x0-prediction with cond_acc, masked noise, DTW alpha-timeline alignment, sigma_max=0.3, tail_weight=0.3, fixed ODE step, fixed l2 padding, d_model=768"
 
 echo "Done at $(date)"

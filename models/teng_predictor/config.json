@@ -1,0 +1,11 @@
+{
+  "t_norm": 300.0,
+  "pool_dim": 768,
+  "hidden": [
+    32
+  ],
+  "subset_frac": 0.5,
+  "n_epochs": 50,
+  "baseline_mae_frames": 20.59,
+  "best_dev_mae_frames": 13.28
+}

@@ -495,8 +495,9 @@ def train(
     # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
     # Use generic indexing — batch is 4-tuple (position) or 5-tuple (dtw)
     sample_batch = next(iter(train_loader))
-    z_acc_sample         = sample_batch[0][:32].to(device, non_blocking=True)
-    z_nat_sample         = sample_batch[1][:32].to(device, non_blocking=True)
+    z_acc_sample          = sample_batch[0][:32].to(device, non_blocking=True)
+    z_nat_sample          = sample_batch[1][:32].to(device, non_blocking=True)
+    l2_speech_end_sample  = sample_batch[2][:32]   # keep on CPU — used as Python ints
     nat_speech_end_sample = sample_batch[3][:32].to(device, non_blocking=True)
 
     # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
@@ -538,10 +539,23 @@ def train(
 
         # Sanity check: cosine sim + prediction scale on fixed sample mini-batch
         if z_acc_sample is not None:
-            from .diffusion import bridge_inference
+            from .diffusion import bridge_inference, bridge_inference_dtw
             with torch.no_grad():
-                z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max,
-                                         parameterization=parameterization)
+                if alignment.startswith("dtw"):
+                    # DTW bridge: run per-sample with correct N(t) masking
+                    z_hats = []
+                    for b in range(z_acc_sample.shape[0]):
+                        z_hats.append(bridge_inference_dtw(
+                            model, z_acc_sample[b:b+1],
+                            T_l2=int(l2_speech_end_sample[b].item()),
+                            T_eng=int(nat_speech_end_sample[b].item()),
+                            n_steps=20, sigma_max=sigma_max,
+                            parameterization=parameterization,
+                        ))
+                    z_hat = torch.cat(z_hats, dim=0)
+                else:
+                    z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max,
+                                             parameterization=parameterization)
                 L = z_hat.shape[1]
                 sp_mask = (torch.arange(L, device=device).unsqueeze(0)
                            < nat_speech_end_sample.unsqueeze(1))  # [B, L]

@@ -113,6 +113,29 @@ def load_encoder_state(state_path: str | Path) -> torch.Tensor:
     return z
 
 
+def load_teng_predictor(
+    ckpt_path: str | Path,
+    device: torch.device,
+) -> torch.nn.Module:
+    """Load TEngPredictor from checkpoint, reading config from sibling config.json."""
+    import json
+    from .train_teng_predictor import TEngPredictor
+
+    ckpt_path = Path(ckpt_path)
+    cfg_path  = ckpt_path.parent / "config.json"
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+
+    predictor = TEngPredictor(
+        pool_dim=cfg.get("pool_dim", 768),
+        hidden=cfg.get("hidden", [256, 64]),
+    )
+    predictor.load_state_dict(
+        torch.load(ckpt_path, map_location=device, weights_only=True)
+    )
+    predictor = predictor.to(device).eval()
+    return predictor
+
+
 def bridge_inference_single(
     bridge: torch.nn.Module,
     z_acc: torch.Tensor,
@@ -132,6 +155,40 @@ def bridge_inference_single(
     return z_nat_hat.squeeze(0).float().cpu()  # [1500, 768]
 
 
+def bridge_inference_single_dtw(
+    bridge: torch.nn.Module,
+    predictor: torch.nn.Module,
+    z_acc: torch.Tensor,
+    T_l2: int,
+    n_steps: int = 20,
+    sigma_max: float = 2.0,
+    device: torch.device = torch.device("cpu"),
+    parameterization: str = "eps",
+) -> torch.Tensor:
+    """DTW bridge inference with N(t) mask driven by TEngPredictor."""
+    from .diffusion import bridge_inference_dtw
+    from .train_teng_predictor import T_NORM
+
+    z_acc_dev = z_acc.to(device=device, dtype=torch.float32)
+
+    # Predict T_eng from mean-pooled speech frames
+    with torch.no_grad():
+        pool = z_acc_dev[:T_l2].mean(dim=0, keepdim=True)          # [1, 768]
+        t_l2_n = torch.tensor([[T_l2 / T_NORM]], device=device)    # [1, 1]
+        T_eng_hat = int(round(
+            predictor(pool, t_l2_n.squeeze(-1)).item() * T_NORM
+        ))
+    T_eng_hat = max(1, min(T_eng_hat, 1500))
+
+    z_acc_bf16 = z_acc_dev.to(torch.bfloat16).unsqueeze(0)  # [1, 1500, 768]
+    with torch.no_grad():
+        z_nat_hat = bridge_inference_dtw(
+            bridge, z_acc_bf16, T_l2=T_l2, T_eng=T_eng_hat,
+            n_steps=n_steps, sigma_max=sigma_max, parameterization=parameterization,
+        )
+    return z_nat_hat.squeeze(0).float().cpu()  # [1500, 768]
+
+
 def transcribe_with_bridge(
     utterances: list[dict],
     bridge: torch.nn.Module,
@@ -141,75 +198,77 @@ def transcribe_with_bridge(
     decoder_type: str = "whisper",
     n_steps: int = 20,
     sigma_max: float = 0.5,
+    predictor: Optional[torch.nn.Module] = None,
 ) -> list[str]:
     """
     Transcribe utterances using bridge-corrected encoder states.
 
-    Args:
-        utterances: List of test utterances with speaker, utterance_id, etc.
-        bridge: Trained BridgeTransformer model
-        processor: Whisper processor (for decoder input format)
-        decoder_model: Decoder model (Whisper or Whisfusion)
-        device: Device to run on
-        decoder_type: "whisper" or "whisfusion"
-        n_steps: Number of ODE steps for bridge inference
-        sigma_max: Bridge noise scale — must match the value used during training
-
-    Returns:
-        List of transcriptions
+    Phase 1: bridge ODE inference one utterance at a time (sequential by design).
+    Phase 2: batch Whisper decoding over accumulated z_nat_hat tensors.
     """
     from transformers.modeling_outputs import BaseModelOutput
 
-    predictions = []
-    pbar = tqdm(utterances, desc="  transcribing (bridge)", unit="utt")
+    if decoder_type not in ("whisper",):
+        raise NotImplementedError(f"Batched decoding not implemented for {decoder_type}")
 
-    for utt in pbar:
-        speaker = utt["speaker"]
+    parameterization = getattr(bridge, "parameterization", "eps")
+
+    # --- Phase 1: bridge inference ---
+    z_nat_hats: list[torch.Tensor | None] = []
+    for utt in tqdm(utterances, desc="  bridge inference", unit="utt"):
+        speaker      = utt["speaker"]
         utterance_id = utt["utterance_id"]
 
-        # Determine which split contains this utterance
         z_acc = None
         for split in ["train", "dev", "test"]:
-            split_dir = get_split_data_dir(split)
+            split_dir  = get_split_data_dir(split)
             state_path = split_dir / speaker / f"{speaker}_{utterance_id}.pt"
             if not state_path.exists():
                 state_path = split_dir / speaker / f"{utterance_id}.pt"
-
             if state_path.exists():
                 z_acc = load_encoder_state(state_path)
                 break
 
         if z_acc is None:
             print(f"[WARN] Could not find encoder state for {speaker}/{utterance_id}")
-            predictions.append("")
+            z_nat_hats.append(None)
             continue
 
-        # Run bridge inference — stitch original L2 silence back for frames beyond speech_end
-        parameterization = getattr(bridge, "parameterization", "eps")
         speech_end = utt.get("speech_end_frame")
-        z_nat_hat = bridge_inference_single(bridge, z_acc, device=device,
-                                            n_steps=n_steps, sigma_max=sigma_max,
-                                            parameterization=parameterization,
-                                            speech_end=speech_end)
-
-        # Decode with bridge-corrected latents
-        if decoder_type == "whisper":
-            # Whisper decoder expects encoder_outputs as BaseModelOutput
-            enc_out = BaseModelOutput(last_hidden_state=z_nat_hat.unsqueeze(0).to(device))
-            with torch.no_grad():
-                pred_ids = decoder_model.generate(
-                    encoder_outputs=enc_out,
-                    language="en",
-                    task="transcribe",
-                    temperature=0.0,
-                )
-            pred = processor.batch_decode(pred_ids, skip_special_tokens=True)[0]
-        elif decoder_type == "whisfusion":
-            raise NotImplementedError("Whisfusion decoder support not yet implemented")
+        if predictor is not None and speech_end is not None:
+            z_hat = bridge_inference_single_dtw(
+                bridge, predictor, z_acc, T_l2=speech_end,
+                n_steps=n_steps, sigma_max=sigma_max,
+                device=device, parameterization=parameterization,
+            )
         else:
-            raise ValueError(f"Unknown decoder type: {decoder_type}")
+            z_hat = bridge_inference_single(
+                bridge, z_acc, device=device,
+                n_steps=n_steps, sigma_max=sigma_max,
+                parameterization=parameterization, speech_end=speech_end,
+            )
+        z_nat_hats.append(z_hat)  # [1500, 768] float32 on CPU
 
-        predictions.append(pred)
+    # --- Phase 2: batched Whisper decode ---
+    # All z_nat_hat are [1500, 768] — no padding needed.
+    valid_idx  = [i for i, z in enumerate(z_nat_hats) if z is not None]
+    predictions = [""] * len(utterances)
+
+    for batch_start in tqdm(range(0, len(valid_idx), BATCH_SIZE),
+                            desc="  whisper decode", unit="batch"):
+        batch_idx  = valid_idx[batch_start : batch_start + BATCH_SIZE]
+        batch_tens = torch.stack([z_nat_hats[i] for i in batch_idx]).to(device)  # [B, 1500, 768]
+        enc_out    = BaseModelOutput(last_hidden_state=batch_tens)
+        with torch.no_grad():
+            pred_ids = decoder_model.generate(
+                encoder_outputs=enc_out,
+                language="en",
+                task="transcribe",
+                temperature=0.0,
+            )
+        batch_preds = processor.batch_decode(pred_ids, skip_special_tokens=True)
+        for i, pred in zip(batch_idx, batch_preds):
+            predictions[i] = pred
 
     return predictions
 
@@ -253,6 +312,7 @@ def evaluate_bridge(
     mapping_path: str = "src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json",
     max_utts_per_speaker: int | None = None,
     output_file: str = "bridge_predictions.csv",
+    predictor_ckpt: str | Path | None = None,
 ) -> None:
     """
     Evaluate bridge model on test speakers.
@@ -275,6 +335,12 @@ def evaluate_bridge(
     # Load bridge
     print(f"[Eval] Loading bridge from {bridge_ckpt}")
     bridge = load_bridge_model(bridge_ckpt, device)
+
+    predictor = None
+    if predictor_ckpt is not None:
+        print(f"[Eval] Loading T_eng predictor from {predictor_ckpt}")
+        predictor = load_teng_predictor(predictor_ckpt, device)
+        print("[Eval] DTW inference mode: N(t) mask enabled")
 
     # Read sigma_max from config if not supplied
     if sigma_max is None:
@@ -325,6 +391,7 @@ def evaluate_bridge(
         decoder_type=decoder,
         n_steps=n_steps,
         sigma_max=sigma_max,
+        predictor=predictor,
     )
 
     # Build results
@@ -417,6 +484,12 @@ if __name__ == "__main__":
         default="bridge_predictions.csv",
         help="Filename for the output CSV within output_dir",
     )
+    parser.add_argument(
+        "--predictor_ckpt",
+        type=str,
+        default=None,
+        help="Path to TEngPredictor checkpoint (enables DTW N(t) mask at inference)",
+    )
 
     args = parser.parse_args()
     evaluate_bridge(
@@ -428,4 +501,5 @@ if __name__ == "__main__":
         mapping_path=args.mapping_path,
         max_utts_per_speaker=args.max_utts_per_speaker,
         output_file=args.output_file,
+        predictor_ckpt=args.predictor_ckpt,
     )

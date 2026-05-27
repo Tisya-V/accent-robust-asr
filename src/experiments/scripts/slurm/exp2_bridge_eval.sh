@@ -46,10 +46,11 @@ echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
 python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-    --bridge_ckpt models/bridge_dtw_x0_l2pad_cond/checkpoint_best.pt \
-    --output_dir results/bridge_eval \
-    --output_file bridge_dtw_x0_l2pad_cond.csv \
-    --max_utts_per_speaker 50 \
-    --n_steps 20
+    --bridge_ckpt    models/bridge_dtw_x0_cond_lowsigma/checkpoint_best.pt \
+    --predictor_ckpt models/teng_predictor/model_best.pt \
+    --output_dir     results/bridge_eval \
+    --output_file    bridge_dtw_x0_cond_lowsigma.csv \
+    --n_steps        20 \
+    --max_utts_per_speaker 50
 
 echo "✅ Bridge evaluation complete."
