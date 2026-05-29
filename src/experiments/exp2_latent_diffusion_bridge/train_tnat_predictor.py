@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Train a small MLP to predict T_eng (native speech end frame) from
+Train a small MLP to predict T_nat (native speech end frame) from
 mean-pooled z_acc speech frames + T_l2.
 
-At bridge inference time T_eng is unknown; this predictor gives an estimate
-so the N(t) mask schedule can be computed as N(t) = round(t*T_l2 + (1-t)*T_eng_hat).
+At bridge inference time T_nat is unknown; this predictor gives an estimate
+so the N(t) mask schedule can be computed as N(t) = round(t*T_l2 + (1-t)*T_nat_hat).
 
 Features
 --------
@@ -14,7 +14,7 @@ Features
 
 Target
 ------
-- T_eng / T_NORM  (scalar)
+- T_nat / T_NORM  (scalar)
 
 Precomputes feature cache (out_dir/features_{split}.pt) on first run.
 """
@@ -54,7 +54,7 @@ def precompute_features(mapping_path: str, cache_path: Path, desc: str):
     with open(mapping_path) as f:
         pairs = json.load(f)
 
-    pools, t_l2s, t_engs = [], [], []
+    pools, t_l2s, t_nats = [], [], []
     skipped = 0
 
     for pair in tqdm(pairs, desc=f"Precompute {desc}"):
@@ -72,7 +72,7 @@ def precompute_features(mapping_path: str, cache_path: Path, desc: str):
 
         pools.append(pool)
         t_l2s.append(float(T_l2))
-        t_engs.append(float(pair["nat_speech_end_frame"]))
+        t_nats.append(float(pair["nat_speech_end_frame"]))
 
     if skipped:
         print(f"[Precompute] Skipped {skipped} pairs with missing encoder states")
@@ -80,18 +80,18 @@ def precompute_features(mapping_path: str, cache_path: Path, desc: str):
     data = {
         "pools":  torch.stack(pools),
         "t_l2s":  torch.tensor(t_l2s,  dtype=torch.float32),
-        "t_engs": torch.tensor(t_engs, dtype=torch.float32),
+        "t_nats": torch.tensor(t_nats, dtype=torch.float32),
     }
     torch.save(data, cache_path)
     print(f"[Precompute] Saved {len(pools)} items → {cache_path}")
-    return data["pools"], data["t_l2s"], data["t_engs"]
+    return data["pools"], data["t_l2s"], data["t_nats"]
 
 
 def load_features(mapping_path: str, cache_path: Path, desc: str):
     if cache_path.exists():
         print(f"[Cache] Loading {desc} features from {cache_path}")
         d = torch.load(cache_path, map_location="cpu", weights_only=False)
-        return d["pools"], d["t_l2s"], d["t_engs"]
+        return d["pools"], d["t_l2s"], d["t_nats"]
     return precompute_features(mapping_path, cache_path, desc)
 
 
@@ -99,7 +99,7 @@ def load_features(mapping_path: str, cache_path: Path, desc: str):
 # Model
 # ---------------------------------------------------------------------------
 
-class TEngPredictor(nn.Module):
+class TNatPredictor(nn.Module):
     def __init__(self, pool_dim: int = 768, hidden: list = None):
         super().__init__()
         if hidden is None:
@@ -121,12 +121,12 @@ class TEngPredictor(nn.Module):
 # Baseline
 # ---------------------------------------------------------------------------
 
-def linear_baseline(t_l2_tr, t_eng_tr, t_l2_dev, t_eng_dev) -> float:
+def linear_baseline(t_l2_tr, t_nat_tr, t_l2_dev, t_nat_dev) -> float:
     X = np.stack([t_l2_tr.numpy(), np.ones(len(t_l2_tr))], axis=1)
-    a, b = np.linalg.lstsq(X, t_eng_tr.numpy(), rcond=None)[0]
+    a, b = np.linalg.lstsq(X, t_nat_tr.numpy(), rcond=None)[0]
     preds = a * t_l2_dev.numpy() + b
-    mae = float(np.abs(preds - t_eng_dev.numpy()).mean())
-    print(f"[Baseline] T_eng = {a:.4f}*T_l2 + {b:.2f}  |  dev MAE = {mae:.2f} frames")
+    mae = float(np.abs(preds - t_nat_dev.numpy()).mean())
+    print(f"[Baseline] T_nat = {a:.4f}*T_l2 + {b:.2f}  |  dev MAE = {mae:.2f} frames")
     return mae
 
 
@@ -146,32 +146,32 @@ def train(args):
     print(f"Device: {device}")
 
     # Load / precompute features
-    pools_tr, t_l2_tr, t_eng_tr = load_features(
+    pools_tr, t_l2_tr, t_nat_tr = load_features(
         args.mapping_train, out / "features_train.pt", "train")
-    pools_dev, t_l2_dev, t_eng_dev = load_features(
+    pools_dev, t_l2_dev, t_nat_dev = load_features(
         args.mapping_dev, out / "features_dev.pt", "dev")
 
     # Optional subset (applied after cache load so cache is always full dataset)
     if args.subset_frac < 1.0:
         n = int(len(pools_tr) * args.subset_frac)
         idx = torch.randperm(len(pools_tr), generator=torch.Generator().manual_seed(args.seed))[:n]
-        pools_tr, t_l2_tr, t_eng_tr = pools_tr[idx], t_l2_tr[idx], t_eng_tr[idx]
+        pools_tr, t_l2_tr, t_nat_tr = pools_tr[idx], t_l2_tr[idx], t_nat_tr[idx]
         print(f"Subset: using {n}/{len(pools_tr) + len(pools_tr) - n} train items")
 
     print(f"Train: {len(pools_tr)}  Dev: {len(pools_dev)}")
-    print(f"T_eng stats — mean: {t_eng_tr.mean():.1f}  std: {t_eng_tr.std():.1f}")
+    print(f"T_nat stats — mean: {t_nat_tr.mean():.1f}  std: {t_nat_tr.std():.1f}")
 
-    baseline_mae = linear_baseline(t_l2_tr, t_eng_tr, t_l2_dev, t_eng_dev)
+    baseline_mae = linear_baseline(t_l2_tr, t_nat_tr, t_l2_dev, t_nat_dev)
 
     # Normalise
-    train_ds = TensorDataset(pools_tr, t_l2_tr / T_NORM, t_eng_tr / T_NORM)
-    dev_ds   = TensorDataset(pools_dev, t_l2_dev / T_NORM, t_eng_dev / T_NORM)
+    train_ds = TensorDataset(pools_tr, t_l2_tr / T_NORM, t_nat_tr / T_NORM)
+    dev_ds   = TensorDataset(pools_dev, t_l2_dev / T_NORM, t_nat_dev / T_NORM)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                               pin_memory=(device.type == "cuda"))
     dev_loader   = DataLoader(dev_ds,   batch_size=args.batch_size, shuffle=False,
                               pin_memory=(device.type == "cuda"))
 
-    model = TEngPredictor().to(device)
+    model = TNatPredictor().to(device)
     print(f"Params: {sum(p.numel() for p in model.parameters())}")
 
     opt   = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -185,14 +185,14 @@ def train(args):
         # --- train ---
         model.train()
         tr_preds, tr_tgts = [], []
-        for pool, t_l2_n, t_eng_n in train_loader:
-            pool, t_l2_n, t_eng_n = pool.to(device), t_l2_n.to(device), t_eng_n.to(device)
+        for pool, t_l2_n, t_nat_n in train_loader:
+            pool, t_l2_n, t_nat_n = pool.to(device), t_l2_n.to(device), t_nat_n.to(device)
             opt.zero_grad()
             pred = model(pool, t_l2_n)
-            loss_fn(pred, t_eng_n).backward()
+            loss_fn(pred, t_nat_n).backward()
             opt.step()
             tr_preds.append(pred.detach().cpu())
-            tr_tgts.append(t_eng_n.cpu())
+            tr_tgts.append(t_nat_n.cpu())
         sched.step()
         tr_mae = (torch.cat(tr_preds) - torch.cat(tr_tgts)).abs().mean().item() * T_NORM
 
@@ -200,10 +200,10 @@ def train(args):
         model.eval()
         dev_preds = []
         with torch.no_grad():
-            for pool, t_l2_n, t_eng_n in dev_loader:
+            for pool, t_l2_n, t_nat_n in dev_loader:
                 dev_preds.append(model(pool.to(device), t_l2_n.to(device)).cpu())
         dev_pred_raw = torch.cat(dev_preds) * T_NORM
-        dev_mae = (dev_pred_raw - t_eng_dev).abs().mean().item()
+        dev_mae = (dev_pred_raw - t_nat_dev).abs().mean().item()
 
         train_maes.append(tr_mae)
         dev_maes.append(dev_mae)
@@ -239,11 +239,11 @@ def train(args):
                             (t_l2_dev / T_NORM).to(device)).cpu() * T_NORM
 
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(t_eng_dev.numpy(), final_preds.numpy(), alpha=0.15, s=5, c="steelblue")
+    ax.scatter(t_nat_dev.numpy(), final_preds.numpy(), alpha=0.15, s=5, c="steelblue")
     lim = (50, 380)
     ax.plot(lim, lim, "r--", lw=1, label="y=x")
     ax.set_xlim(lim); ax.set_ylim(lim)
-    ax.set_xlabel("T_eng true (frames)"); ax.set_ylabel("T_eng predicted (frames)")
+    ax.set_xlabel("T_nat true (frames)"); ax.set_ylabel("T_nat predicted (frames)")
     ax.set_title(f"Dev MAE = {best_dev_mae:.1f} frames  (baseline {baseline_mae:.1f})")
     ax.legend(); ax.grid(alpha=0.3)
     fig.tight_layout()

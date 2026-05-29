@@ -45,12 +45,17 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
-python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-    --bridge_ckpt    models/bridge_dtw_x0_cond_lowsigma/checkpoint_best.pt \
-    --predictor_ckpt models/teng_predictor/model_best.pt \
-    --output_dir     results/bridge_eval \
-    --output_file    bridge_dtw_x0_cond_lowsigma.csv \
-    --n_steps        20 \
-    --max_utts_per_speaker 50
+MODELS=( "bridge_position_x0_cond_lowsigma")
+
+for MODEL in "${MODELS[@]}"; do
+    python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+        --bridge_ckpt    models/"$MODEL"/checkpoint_best.pt \
+        --predictor_ckpt models/tnat_predictor/model_best.pt \
+        --output_dir     results/bridge_eval \
+        --output_file    "$MODEL".csv \
+        --n_steps        20 \
+        --max_utts_per_speaker 50 \
+        --tnat_buffer   35
+done
 
 echo "✅ Bridge evaluation complete."

@@ -27,8 +27,9 @@ echo "=========================================="
 
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --alignment    position \
+    --cond_acc        \
     --parameterization x0 \
-    --out_dir      models/bridge_position_x0 \
+    --out_dir      models/bridge_position_x0_cond_lowsigma \
     --d_model 768 \
     --dim_feedforward 3072 \
     --n_heads 12 \
@@ -36,10 +37,10 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --batch_size   64 \
     --lr           1e-4 \
     --weight_decay 1e-4 \
-    --sigma_max    1.5 \
+    --sigma_max    0.3 \
     --num_workers  6 \
     --patience     5 \
-    --tail_weight  0.3 \
-    --notes        "x0-prediction, position alignment, cond_acc=False, sigma_max=1.5, tail_weight=0.3, d_model=768"
+    --tail_weight  0.0 \
+    --notes        "x0-prediction with cond, position alignment, sigma_max=0.3, tail_weight=0.0 , d_model=768"
 
 echo "Done at $(date)"

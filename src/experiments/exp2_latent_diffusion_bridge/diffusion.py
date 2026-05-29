@@ -33,37 +33,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def sample_forward(z_nat: torch.Tensor, z_acc: torch.Tensor, t: torch.Tensor, sigma_max: float = 0.5) -> torch.Tensor:
-    """
-    Forward diffusion process: interpolate between z_nat (clean) and z_acc (corrupted).
-
-    z_t = (1-t)·z_nat + t·z_acc + σ_bridge(t)·ε
-
-    where σ_bridge(t) = sigma_max · √(t(1-t)) peaks at t=0.5 and is 0 at both endpoints.
-
-    Args:
-        z_nat: [B, L, D] native encoder states (target)
-        z_acc: [B, L, D] accented encoder states (corrupted)
-        t: [B] timesteps in [0, 1]
-        sigma_max: max noise scale
-
-    Returns:
-        z_t: [B, L, D] noisy interpolation at timestep t
-        eps: [B, L, D] sampled Gaussian noise (kept for debugging)
-    """
-    B, L, D = z_nat.shape
-    device, dtype = z_nat.device, z_nat.dtype
-
-    eps = torch.randn(B, L, D, device=device, dtype=dtype)
-
-    t = t.view(B, 1, 1)
-
-    sigma_t = sigma_max * torch.sqrt((t * (1 - t)).clamp(min=1e-5))
-    z_t = (1 - t) * z_nat + t * z_acc + sigma_t * eps
-
-    return z_t, eps
-
-
 def bridge_loss(
     model: nn.Module,
     z_nat: torch.Tensor,
@@ -72,175 +41,110 @@ def bridge_loss(
     nat_speech_end: torch.Tensor,
     sigma_max: float = 0.5,
     parameterization: str = "eps",
-    pos_tail: str = "fixed",
     tail_weight: float = 0.3,
 ) -> tuple[torch.Tensor, float, float]:
     """
     Training loss for the position-aligned bridge (I²SB).
 
-    z_nat_canon = z_nat[:T_nat] || z_acc[T_l2:] tiled to fill [T_nat:1500].
-    Loss: all-frames MSE against z_nat_canon (no masking).
+    N(t) = round(t·T_l2 + (1-t)·T_nat) varies the active speech region each step,
+    matching the DTW bridge convention. Speech [0:N(t)] is a positional (frame-by-frame)
+    blend; tail [N(t):] copies z_acc[T_l2:] frames — on-manifold silence.
+    Bridge noise is added to speech frames only. Inference is shared with bridge_loss_dtw
+    via bridge_inference (same N(t) masking, different training blend).
 
-    pos_tail controls forward process tail construction:
-      "fixed" — speech [0:T_nat] linearly interpolated; tail fixed at z_nat_canon
-      "full"  — standard I²SB linear blend of all 1500 frames via z_nat_canon
-
-    Args:
-        model:            BridgeTransformer
-        z_nat:            [B, L, D] native reference states
-        z_acc:            [B, L, D] accented input states
-        l2_speech_end:    [B] L2 speech end frame — tail source start index
-        nat_speech_end:   [B] native speech end frame — z_nat_canon boundary
-        sigma_max:        noise schedule parameter
-        parameterization: "eps" or "x0"
-        pos_tail:         "fixed" or "full"
-
-    Returns:
-        loss: scalar MSE over all 1500 frames against z_nat_canon
+    z_nat_canon = z_nat[:T_nat] || z_acc[T_l2:] placed at [T_nat:].
+    Loss: (speech_mask & ~tail_mask) full weight; tail_mask downweighted.
     """
-    B, L, D = z_nat.shape
-    device = z_nat.device
+    B, _, D = z_nat.shape
+    device  = z_nat.device
 
-    # ── z_nat_canon: z_nat[:T_nat] || z_acc[T_l2:] tiled to [T_nat:L] ────────
-    tail_mask    = torch.arange(L, device=device).unsqueeze(0) >= nat_speech_end.unsqueeze(1)   # [B, L]
-    tail_offset  = torch.arange(L, device=device).unsqueeze(0) - nat_speech_end.unsqueeze(1)    # [B, L]
-    tail_src_idx = (l2_speech_end.unsqueeze(1) + tail_offset).clamp(0, L - 1)                   # [B, L]
-    z_acc_tail   = torch.gather(z_acc, 1, tail_src_idx.unsqueeze(-1).expand(-1, -1, D))          # [B, L, D]
-    z_nat_canon  = torch.where(tail_mask.unsqueeze(-1), z_acc_tail, z_nat)                       # [B, L, D]
+    # Crop to active region — same optimisation as bridge_loss_dtw
+    max_len = int(max(l2_speech_end.max(), nat_speech_end.max()).item()) + 1
+    z_nat   = z_nat[:, :max_len, :]
+    z_acc   = z_acc[:, :max_len, :]
 
-    # ── Forward process ────────────────────────────────────────────────────────
-    t = torch.rand(B, device=device)
+    T_l2  = l2_speech_end.float()
+    T_nat = nat_speech_end.float()
 
-    if pos_tail == "fixed":
-        # Speech [0:T_nat]: interpolate z_nat ↔ z_acc; tail: z_nat_canon (no interp)
-        eps      = torch.randn_like(z_acc)
-        sigma_t  = (sigma_max * torch.sqrt((t * (1 - t)).clamp(min=1e-5))).view(B, 1, 1)
-        t_view   = t.view(B, 1, 1)
-        z_t_blend = (1 - t_view) * z_nat + t_view * z_acc
-        z_t = torch.where(tail_mask.unsqueeze(-1), z_nat_canon, z_t_blend) + sigma_t * eps
-    else:
-        # "full": standard I²SB linear blend of all 1500 frames
-        z_t, _ = sample_forward(z_nat_canon, z_acc, t, sigma_max=sigma_max)
+    # ── 1. Sample t, compute N(t) ─────────────────────────────────────────────
+    t_batch = torch.rand(B, device=device, dtype=torch.float32)
+    N_batch = (t_batch * T_l2 + (1 - t_batch) * T_nat).round().long().clamp(min=1)  # [B]
 
-    # ── Prediction ─────────────────────────────────────────────────────────────
+    # ── 2. speech_mask: True for active speech frames ─────────────────────────
+    pos         = torch.arange(max_len, device=device).unsqueeze(0).expand(B, -1)  # [B, max_len]
+    speech_mask = pos < N_batch.unsqueeze(1)                                        # [B, max_len]
+
+    # ── 3. Forward z_t: positional blend for speech, z_acc[T_l2:] for tail ───
+    t_view         = t_batch.view(B, 1, 1)
+    z_speech_blend = (1 - t_view) * z_nat + t_view * z_acc                                  # [B, max_len, D]
+    tail_offset    = (pos - N_batch.unsqueeze(1)).clamp(min=0)                               # [B, max_len]
+    tail_src       = (l2_speech_end.long().unsqueeze(1) + tail_offset).clamp(0, max_len - 1) # [B, max_len]
+    z_tail         = torch.gather(z_acc, 1, tail_src.unsqueeze(-1).expand(-1, -1, D))        # [B, max_len, D]
+    z_clean        = torch.where(speech_mask.unsqueeze(-1), z_speech_blend, z_tail)
+
+    sigma_br = (sigma_max * torch.sqrt((t_batch * (1 - t_batch)).clamp(min=1e-5))).view(B, 1, 1)
+    eps      = torch.randn_like(z_clean)
+    z_t      = z_clean + sigma_br * eps * speech_mask.unsqueeze(-1)
+
+    # ── 4. z_nat_canon: z_nat[:T_nat] || z_acc[T_l2:] placed at [T_nat:] ─────
+    tail_mask    = nat_speech_end.unsqueeze(1) <= pos                                           # [B, max_len]
+    canon_offset = pos - nat_speech_end.unsqueeze(1)
+    canon_src    = (l2_speech_end.long().unsqueeze(1) + canon_offset).clamp(0, max_len - 1)    # [B, max_len]
+    z_acc_tail   = torch.gather(z_acc, 1, canon_src.unsqueeze(-1).expand(-1, -1, D))
+    z_nat_canon  = torch.where(tail_mask.unsqueeze(-1), z_acc_tail, z_nat)                     # [B, max_len, D]
+
+    # ── 5. Prediction ─────────────────────────────────────────────────────────
     if parameterization == "x0":
-        pred   = model(z_t, t, z_acc)
+        pred   = model(z_t, t_batch, z_acc)
         target = z_nat_canon
     else:
-        t_expanded    = t.view(B, 1, 1)
-        sigma_forward = sigma_max * torch.sqrt(t_expanded.clamp(min=1e-5))
-        target = (z_t - z_nat_canon) / (sigma_forward + 1e-8)
-        pred   = model(z_t, t, z_acc)
+        sigma_fwd = (sigma_max * torch.sqrt(t_batch.clamp(min=1e-5))).view(B, 1, 1)
+        target    = (z_t - z_nat_canon) / (sigma_fwd + 1e-8)
+        pred      = model(z_t, t_batch, z_acc)
 
-    # ── Split loss: speech [0:T_nat] full weight, tail [T_nat:] downweighted ──
-    # Use elementwise multiply to avoid expensive non-contiguous gathers
-    diff_sq   = (pred - target).pow(2)               # [B, L, D]
-    sp_mask_f = (~tail_mask).float().unsqueeze(-1)   # [B, L, 1] — broadcasts over D
+    # ── 6. Split loss: [0:T_nat] full weight, [T_nat:] downweighted ──────────
+    diff_sq   = (pred - target).pow(2)
+    sp_mask_f = (speech_mask & ~tail_mask).float().unsqueeze(-1)
     tl_mask_f = tail_mask.float().unsqueeze(-1)
-    D = pred.shape[-1]
-    speech_loss = (diff_sq * sp_mask_f).sum() / (sp_mask_f.sum() * D)
-    tail_loss   = (diff_sq * tl_mask_f).sum() / (tl_mask_f.sum() * D)
+    feat_dim  = pred.shape[-1]
+    speech_loss = (diff_sq * sp_mask_f).sum() / (sp_mask_f.sum() * feat_dim)
+    tail_loss   = (diff_sq * tl_mask_f).sum() / (tl_mask_f.sum() * feat_dim)
     return speech_loss + tail_weight * tail_loss, speech_loss.item(), tail_loss.item()
 
 
 def bridge_inference(
     model: nn.Module,
     z_acc: torch.Tensor,
-    n_steps: int = 20,
-    sigma_max: float = 2.0,
-    parameterization: str = "eps",
-    speech_end: Optional[int] = None,
-) -> torch.Tensor:
-    """
-    Reverse diffusion: map z_acc (corrupted) → z_nat_hat (corrected).
-
-    Deterministic ODE reverse from t=1→0 (I²SB p_posterior with ot_ode=True).
-
-    At each step t_cur → t_next:
-    1. eps_pred   = model(z_t, t_cur)
-    2. z_nat_hat  = z_t − σ_fwd(t_cur)·eps_pred        (I²SB compute_pred_x0)
-    3. z_t        = (1 − t_next/t_cur)·z_nat_hat
-                  + (t_next/t_cur)·z_t                  (I²SB p_posterior OT-ODE)
-
-    Step 3 uses the CURRENT z_t, not the original z_acc, so corrections accumulate
-    across steps (at step 1 where t_cur=1 both forms coincide).
-    When eps_pred≈0: z_nat_hat = z_t → inference is identity → graceful degradation.
-
-    Args:
-        model:     BridgeTransformer for noise prediction
-        z_acc:     [B, L, D] accented (corrupted) encoder states
-        n_steps:   number of ODE steps
-        sigma_max: bridge noise scale — must match training value
-
-    Returns:
-        z_nat_hat: [B, L, D] corrected encoder states
-    """
-    B, L, D = z_acc.shape
-    device, dtype = z_acc.device, z_acc.dtype
-
-    t_schedule = torch.linspace(1.0, 0.0, n_steps + 1, device=device, dtype=dtype)
-    z_t = z_acc.clone()
-
-    model.eval()
-    with torch.no_grad():
-        for i in range(n_steps):
-            t_cur  = t_schedule[i]
-            t_next = t_schedule[i + 1]
-
-            t_cur_batch = torch.full((B,), t_cur, device=device, dtype=dtype)
-
-            if parameterization == "x0":
-                z_nat_hat = model(z_t, t_cur_batch, z_acc)
-            else:
-                eps_pred = model(z_t, t_cur_batch, z_acc)
-                sigma_forward_cur = sigma_max * torch.sqrt(torch.clamp(t_cur, min=1e-5))
-                z_nat_hat = z_t - sigma_forward_cur * eps_pred
-
-            if i == n_steps - 1:
-                break
-
-            # I²SB p_posterior (OT-ODE): z_{t'} = (1 - t'/t)·z_nat_hat + (t'/t)·z_t
-            z_t = (1 - t_next / t_cur) * z_nat_hat + (t_next / t_cur) * z_t
-
-    if speech_end is not None:
-        z_nat_hat[:, speech_end:, :] = z_acc[:, speech_end:, :]
-    return z_nat_hat
-
-
-def bridge_inference_dtw(
-    model: nn.Module,
-    z_acc: torch.Tensor,
     T_l2: int,
-    T_eng: int,
+    T_nat: int,
     n_steps: int = 20,
     sigma_max: float = 2.0,
     parameterization: str = "eps",
 ) -> torch.Tensor:
     """
-    DTW-aware reverse diffusion with N(t) mask schedule.
+    Reverse diffusion with N(t) mask schedule — shared by position and DTW alignments.
 
     At each ODE step the active speech region is [0:N(t)] where
-      N(t) = round(t·T_l2 + (1-t)·T_eng)
-    Frames [N(t):] are held at on-manifold silence (z_acc[T_l2] repeated)
+      N(t) = round(t·T_l2 + (1-t)·T_nat)
+    Frames [N(t):] are held at on-manifold silence (z_acc[T_l2:] frames)
     so the bridge never operates on padding frames.
 
-    T_l2 and T_eng are scalars (per-utterance inference).
-    T_eng should come from the TEngPredictor; T_l2 from the mapping JSON.
+    T_l2 from the mapping JSON; T_nat from TNatPredictor (required for both alignments).
 
     Args:
-        model:   BridgeTransformer
-        z_acc:   [B, 1500, 768] accented encoder states
-        T_l2:    accented speech end frame
-        T_eng:   predicted native speech end frame (from TEngPredictor)
-        n_steps: ODE steps
-        sigma_max: must match training value (DTW: 2.0)
+        model:     BridgeTransformer
+        z_acc:     [B, 1500, 768] accented encoder states
+        T_l2:      accented speech end frame
+        T_nat:     predicted native speech end frame
+        n_steps:   ODE steps
+        sigma_max: must match training value
     """
     B, L, D = z_acc.shape
     device, dtype = z_acc.device, z_acc.dtype
 
     # Crop model inputs to match training distribution — model only saw frames
-    # up to max(T_l2, T_eng) during training; frames beyond are OOD in z_acc.
-    inf_len = max(T_l2, T_eng) + 1
+    # up to max(T_l2, T_nat) during training; frames beyond are OOD in z_acc.
+    inf_len = max(T_l2, T_nat) + 1
     z_acc_crop = z_acc[:, :inf_len, :]
 
     t_schedule = torch.linspace(1.0, 0.0, n_steps + 1, device=device, dtype=dtype)
@@ -252,7 +156,7 @@ def bridge_inference_dtw(
         return torch.arange(T_l2, T_l2 + (L - N_t), device=device).clamp(max=L - 1)
 
     def _apply_mask(z: torch.Tensor, t: float) -> torch.Tensor:
-        N_t = max(1, round(float(t) * T_l2 + (1 - float(t)) * T_eng))
+        N_t = max(1, round(float(t) * T_l2 + (1 - float(t)) * T_nat))
         N_t = min(N_t, L)
         z[:, N_t:, :] = z_acc[:, _sil_src(N_t), :]
         return z
@@ -286,8 +190,8 @@ def bridge_inference_dtw(
             z_t = (1 - t_next / t_cur) * z_nat_hat + (t_next / t_cur) * z_t
             z_t = _apply_mask(z_t, t_next.item())
 
-    # Enforce silence from T_eng onwards in the final output
-    z_nat_hat[:, T_eng:, :] = z_acc[:, _sil_src(T_eng), :]
+    # Enforce silence from T_nat onwards in the final output
+    z_nat_hat[:, T_nat:, :] = z_acc[:, _sil_src(T_nat), :]
     return z_nat_hat
 
 
@@ -309,7 +213,7 @@ def sample_forward_dtw(
     z_acc_np: np.ndarray,
     t: float,
     path_arr: np.ndarray,
-    T_eng: int,
+    T_nat: int,
     T_l2: int,
     eps: np.ndarray,
     sigma_max: float = 0.5,
@@ -317,7 +221,7 @@ def sample_forward_dtw(
     """DTW-aligned forward process for a single (z_nat, z_acc) pair.
 
     Speech frames are DTW-interpolated using the alpha-timeline method:
-      N(t) = round((1-t)·T_l2 + t·T_eng) output frames
+      N(t) = round((1-t)·T_l2 + t·T_nat) output frames
       t_k  = (1-t)·j_norm + t·i_norm      blended path timeline
 
     Tail frames (N(t)..1499) are linearly interpolated between L2 and native silence.
@@ -332,7 +236,7 @@ def sample_forward_dtw(
         z_acc_np:  [1500, D] accented encoder states (float32)
         t:         scalar timestep in [0, 1]
         path_arr:  [P, 2] int16 DTW warping path
-        T_eng:     native speech end frame
+        T_nat:     native speech end frame
         T_l2:      L2 speech end frame
         eps:       [1500, D] pre-generated Gaussian noise (float32)
         sigma_max: noise schedule parameter
@@ -342,11 +246,11 @@ def sample_forward_dtw(
     """
     # Bridge convention: t=0=clean=z_nat, t=1=corrupted=z_acc
     # Steering alpha = 1-t, so N and t_k are mirrored from run_steering.py
-    N        = max(1, round(t * T_l2 + (1 - t) * T_eng))
-    eng_norm = path_arr[:, 0].astype(np.float32) / max(T_eng - 1, 1)
+    N        = max(1, round(t * T_l2 + (1 - t) * T_nat))
+    nat_norm = path_arr[:, 0].astype(np.float32) / max(T_nat - 1, 1)
     l2_norm  = path_arr[:, 1].astype(np.float32) / max(T_l2  - 1, 1)
 
-    t_k   = t * l2_norm + (1 - t) * eng_norm
+    t_k   = t * l2_norm + (1 - t) * nat_norm
     out_t = np.linspace(0.0, 1.0, N, dtype=np.float32)
 
     idx_r = np.clip(np.searchsorted(t_k, out_t), 0, len(t_k) - 1)
@@ -362,7 +266,7 @@ def sample_forward_dtw(
     need = 1500 - N
     if need > 0:
         l2_pad  = _extend_sil(z_acc_np[T_l2:],  need)
-        nat_pad = _extend_sil(z_nat_np[T_eng:], need)
+        nat_pad = _extend_sil(z_nat_np[T_nat:], need)
         tail    = ((1 - t) * nat_pad + t * l2_pad).astype(np.float32)
         z_clean = np.concatenate([speech, tail], axis=0)
     else:
@@ -406,7 +310,7 @@ def bridge_loss_dtw(
     device    = z_nat.device
     max_P     = path_tensor.shape[1]
 
-    # Crop to active region — frames beyond max(T_l2, T_eng) in this batch are
+    # Crop to active region — frames beyond max(T_l2, T_nat) in this batch are
     # frozen silence in z_t and trivial offset-mismatch in z_nat_canon.
     # Reduces attention from O(1500²) to O(max_len²); p99 max_len ≈ 380.
     max_len = int(max(l2_speech_ends.max(), nat_speech_ends.max()).item()) + 1
@@ -416,17 +320,17 @@ def bridge_loss_dtw(
     # ── 1. Sample t per item ──────────────────────────────────────────────────
     t_batch = torch.rand(B, device=device, dtype=torch.float32)  # [B]
 
-    # ── 2. Output speech length N(t) = round(t*T_l2 + (1-t)*T_eng) ─────────────
+    # ── 2. Output speech length N(t) = round(t*T_l2 + (1-t)*T_nat) ─────────────
     # Bridge convention: t=0=clean=z_nat (native), t=1=corrupted=z_acc (L2)
     T_l2  = l2_speech_ends.float()   # [B]
-    T_eng = nat_speech_ends.float()  # [B]
-    N_batch = (t_batch * T_l2 + (1 - t_batch) * T_eng).round().long().clamp(min=1)  # [B]
+    T_nat = nat_speech_ends.float()  # [B]
+    N_batch = (t_batch * T_l2 + (1 - t_batch) * T_nat).round().long().clamp(min=1)  # [B]
     max_N   = int(N_batch.max())
 
-    # ── 3. Blended path timeline t_k = t*l2_norm + (1-t)*eng_norm ───────────
-    eng_norm = path_tensor[:, :, 0].float() / (T_eng - 1).clamp(min=1).unsqueeze(1)  # [B, max_P]
+    # ── 3. Blended path timeline t_k = t*l2_norm + (1-t)*nat_norm ───────────
+    nat_norm = path_tensor[:, :, 0].float() / (T_nat - 1).clamp(min=1).unsqueeze(1)  # [B, max_P]
     l2_norm  = path_tensor[:, :, 1].float() / (T_l2  - 1).clamp(min=1).unsqueeze(1)  # [B, max_P]
-    t_k      = t_batch[:, None] * l2_norm + (1 - t_batch[:, None]) * eng_norm         # [B, max_P]
+    t_k      = t_batch[:, None] * l2_norm + (1 - t_batch[:, None]) * nat_norm         # [B, max_P]
 
     # ── 4. Per-item output grid out_t[b,k] = k / (N_b - 1) ──────────────────
     k_grid = torch.arange(max_N, device=device, dtype=torch.float32).unsqueeze(0)   # [1, max_N]
@@ -449,12 +353,12 @@ def bridge_loss_dtw(
     speech     = (1 - t_view) * speech_nat + t_view * speech_acc                   # [B, max_N, D]
 
     # ── 7. Tail (silence) frames: alpha-blend L2 and native silence ───────────
-    # For item i: silence starts at T_l2_i (L2) / T_eng_i (nat) and runs to 1499.
+    # For item i: silence starts at T_l2_i (L2) / T_nat_i (nat) and runs to 1499.
     # Gather up to max_need = 1500 - min(N) frames; items with larger N use a prefix.
     max_need   = max_len - int(N_batch.min())
     tail_range = torch.arange(max_need, device=device).unsqueeze(0)                         # [1, max_need]
     tail_i_acc = (T_l2.long().unsqueeze(1)  + tail_range).clamp(0, max_len - 1)             # [B, max_need]
-    tail_i_nat = (T_eng.long().unsqueeze(1) + tail_range).clamp(0, max_len - 1)             # [B, max_need]
+    tail_i_nat = (T_nat.long().unsqueeze(1) + tail_range).clamp(0, max_len - 1)             # [B, max_need]
     tail_acc   = torch.gather(z_acc, 1, tail_i_acc.unsqueeze(-1).expand(-1, -1, D))         # [B, max_need, D]
     tail_nat   = torch.gather(z_nat, 1, tail_i_nat.unsqueeze(-1).expand(-1, -1, D))         # [B, max_need, D]
     if dtw_tail == "l2":
@@ -500,7 +404,7 @@ def bridge_loss_dtw(
         pred   = model(z_t, t_batch, z_acc)
 
     diff_sq   = (pred - target).pow(2)
-    sp_mask_f = (speech_mask & ~tail_mask).float().unsqueeze(-1)  # [0:min(N(t),T_eng)] only
+    sp_mask_f = (speech_mask & ~tail_mask).float().unsqueeze(-1)  # [0:min(N(t),T_nat)] only
     tl_mask_f = tail_mask.float().unsqueeze(-1)
     D = pred.shape[-1]
     speech_loss = (diff_sq * sp_mask_f).sum() / (sp_mask_f.sum() * D)

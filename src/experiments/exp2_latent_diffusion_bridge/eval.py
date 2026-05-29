@@ -113,19 +113,19 @@ def load_encoder_state(state_path: str | Path) -> torch.Tensor:
     return z
 
 
-def load_teng_predictor(
+def load_tnat_predictor(
     ckpt_path: str | Path,
     device: torch.device,
 ) -> torch.nn.Module:
-    """Load TEngPredictor from checkpoint, reading config from sibling config.json."""
+    """Load TNatPredictor from checkpoint, reading config from sibling config.json."""
     import json
-    from .train_teng_predictor import TEngPredictor
+    from .train_tnat_predictor import TNatPredictor
 
     ckpt_path = Path(ckpt_path)
     cfg_path  = ckpt_path.parent / "config.json"
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
 
-    predictor = TEngPredictor(
+    predictor = TNatPredictor(
         pool_dim=cfg.get("pool_dim", 768),
         hidden=cfg.get("hidden", [256, 64]),
     )
@@ -139,51 +139,36 @@ def load_teng_predictor(
 def bridge_inference_single(
     bridge: torch.nn.Module,
     z_acc: torch.Tensor,
-    n_steps: int = 20,
-    sigma_max: float = 0.5,
-    device: torch.device = torch.device("cpu"),
-    parameterization: str = "eps",
-    speech_end: Optional[int] = None,
-) -> torch.Tensor:
-    """Run bridge inference on a single [1500, 768] latent."""
-    from .diffusion import bridge_inference
-
-    z_acc = z_acc.to(device=device, dtype=torch.bfloat16).unsqueeze(0)  # [1, 1500, 768]
-    with torch.no_grad():
-        z_nat_hat = bridge_inference(bridge, z_acc, n_steps=n_steps, sigma_max=sigma_max,
-                                     parameterization=parameterization, speech_end=speech_end)
-    return z_nat_hat.squeeze(0).float().cpu()  # [1500, 768]
-
-
-def bridge_inference_single_dtw(
-    bridge: torch.nn.Module,
-    predictor: torch.nn.Module,
-    z_acc: torch.Tensor,
     T_l2: int,
     n_steps: int = 20,
     sigma_max: float = 2.0,
     device: torch.device = torch.device("cpu"),
     parameterization: str = "eps",
+    predictor: Optional[torch.nn.Module] = None,
+    tnat_buffer: int = 0,
 ) -> torch.Tensor:
-    """DTW bridge inference with N(t) mask driven by TEngPredictor."""
-    from .diffusion import bridge_inference_dtw
-    from .train_teng_predictor import T_NORM
+    """Bridge inference for a single [1500, 768] latent (position or DTW alignment).
+
+    Predicts T_nat via predictor if provided; falls back to T_l2 if not.
+    """
+    from .diffusion import bridge_inference
+    from .train_tnat_predictor import T_NORM
 
     z_acc_dev = z_acc.to(device=device, dtype=torch.float32)
 
-    # Predict T_eng from mean-pooled speech frames
-    with torch.no_grad():
-        pool = z_acc_dev[:T_l2].mean(dim=0, keepdim=True)          # [1, 768]
-        t_l2_n = torch.tensor([[T_l2 / T_NORM]], device=device)    # [1, 1]
-        T_eng_hat = int(round(
-            predictor(pool, t_l2_n.squeeze(-1)).item() * T_NORM
-        ))
-    T_eng_hat = max(1, min(T_eng_hat, 1500))
+    if predictor is not None:
+        with torch.no_grad():
+            pool   = z_acc_dev[:T_l2].mean(dim=0, keepdim=True)
+            t_l2_n = torch.tensor([[T_l2 / T_NORM]], device=device)
+            T_nat  = int(round(predictor(pool, t_l2_n.squeeze(-1)).item() * T_NORM))
+        T_nat = max(1, min(T_nat + tnat_buffer, 1500))
+    else:
+        T_nat = T_l2  # fallback: assume same length as L2
 
     z_acc_bf16 = z_acc_dev.to(torch.bfloat16).unsqueeze(0)  # [1, 1500, 768]
     with torch.no_grad():
-        z_nat_hat = bridge_inference_dtw(
-            bridge, z_acc_bf16, T_l2=T_l2, T_eng=T_eng_hat,
+        z_nat_hat = bridge_inference(
+            bridge, z_acc_bf16, T_l2=T_l2, T_nat=T_nat,
             n_steps=n_steps, sigma_max=sigma_max, parameterization=parameterization,
         )
     return z_nat_hat.squeeze(0).float().cpu()  # [1500, 768]
@@ -199,6 +184,7 @@ def transcribe_with_bridge(
     n_steps: int = 20,
     sigma_max: float = 0.5,
     predictor: Optional[torch.nn.Module] = None,
+    tnat_buffer: int = 0,
 ) -> list[str]:
     """
     Transcribe utterances using bridge-corrected encoder states.
@@ -235,18 +221,16 @@ def transcribe_with_bridge(
             continue
 
         speech_end = utt.get("speech_end_frame")
-        if predictor is not None and speech_end is not None:
-            z_hat = bridge_inference_single_dtw(
-                bridge, predictor, z_acc, T_l2=speech_end,
-                n_steps=n_steps, sigma_max=sigma_max,
-                device=device, parameterization=parameterization,
-            )
-        else:
-            z_hat = bridge_inference_single(
-                bridge, z_acc, device=device,
-                n_steps=n_steps, sigma_max=sigma_max,
-                parameterization=parameterization, speech_end=speech_end,
-            )
+        if speech_end is None:
+            print(f"[WARN] No speech_end_frame for {utt['speaker']}/{utt['utterance_id']} — skipping")
+            z_nat_hats.append(None)
+            continue
+        z_hat = bridge_inference_single(
+            bridge, z_acc, T_l2=speech_end,
+            n_steps=n_steps, sigma_max=sigma_max,
+            device=device, parameterization=parameterization,
+            predictor=predictor, tnat_buffer=tnat_buffer,
+        )
         z_nat_hats.append(z_hat)  # [1500, 768] float32 on CPU
 
     # --- Phase 2: batched Whisper decode ---
@@ -313,6 +297,7 @@ def evaluate_bridge(
     max_utts_per_speaker: int | None = None,
     output_file: str = "bridge_predictions.csv",
     predictor_ckpt: str | Path | None = None,
+    tnat_buffer: int = 0,
 ) -> None:
     """
     Evaluate bridge model on test speakers.
@@ -338,9 +323,9 @@ def evaluate_bridge(
 
     predictor = None
     if predictor_ckpt is not None:
-        print(f"[Eval] Loading T_eng predictor from {predictor_ckpt}")
-        predictor = load_teng_predictor(predictor_ckpt, device)
-        print("[Eval] DTW inference mode: N(t) mask enabled")
+        print(f"[Eval] Loading T_nat predictor from {predictor_ckpt}")
+        predictor = load_tnat_predictor(predictor_ckpt, device)
+        print("[Eval] N(t) mask inference enabled")
 
     # Read sigma_max from config if not supplied
     if sigma_max is None:
@@ -392,6 +377,7 @@ def evaluate_bridge(
         n_steps=n_steps,
         sigma_max=sigma_max,
         predictor=predictor,
+        tnat_buffer=tnat_buffer,
     )
 
     # Build results
@@ -488,7 +474,13 @@ if __name__ == "__main__":
         "--predictor_ckpt",
         type=str,
         default=None,
-        help="Path to TEngPredictor checkpoint (enables DTW N(t) mask at inference)",
+        help="Path to TNatPredictor checkpoint (enables DTW N(t) mask at inference)",
+    )
+    parser.add_argument(
+        "--tnat_buffer",
+        type=int,
+        default=0,
+        help="Extra frames added to T_nat_hat before bridge inference to guard against truncation",
     )
 
     args = parser.parse_args()
@@ -502,4 +494,5 @@ if __name__ == "__main__":
         max_utts_per_speaker=args.max_utts_per_speaker,
         output_file=args.output_file,
         predictor_ckpt=args.predictor_ckpt,
+        tnat_buffer=args.tnat_buffer,
     )

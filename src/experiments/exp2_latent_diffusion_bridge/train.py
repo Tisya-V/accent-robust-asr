@@ -144,7 +144,6 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
 
 
 _DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english"}
-_POS_TAIL_MAP = {"position": "full", "position_fixed": "fixed"}
 
 
 def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
@@ -168,10 +167,9 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
-        pos_tail       = _POS_TAIL_MAP.get(alignment, "fixed")
         return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                            sigma_max=sigma_max, parameterization=parameterization,
-                           pos_tail=pos_tail, tail_weight=tail_weight)
+                           tail_weight=tail_weight)
 
 
 def train_epoch(
@@ -501,7 +499,7 @@ def train(
     nat_speech_end_sample = sample_batch[3][:32].to(device, non_blocking=True)
 
     # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
-    # Mask to T_nat (not T_l2): consistent with steering notebook cos_sim_speech(., ., eng_end).
+    # Mask to T_nat (not T_l2): consistent with steering notebook cos_sim_speech(., ., nat_end).
     baseline_sim = None
     if z_acc_sample is not None:
         mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < nat_speech_end_sample.unsqueeze(1)
@@ -539,23 +537,18 @@ def train(
 
         # Sanity check: cosine sim + prediction scale on fixed sample mini-batch
         if z_acc_sample is not None:
-            from .diffusion import bridge_inference, bridge_inference_dtw
+            from .diffusion import bridge_inference
             with torch.no_grad():
-                if alignment.startswith("dtw"):
-                    # DTW bridge: run per-sample with correct N(t) masking
-                    z_hats = []
-                    for b in range(z_acc_sample.shape[0]):
-                        z_hats.append(bridge_inference_dtw(
-                            model, z_acc_sample[b:b+1],
-                            T_l2=int(l2_speech_end_sample[b].item()),
-                            T_eng=int(nat_speech_end_sample[b].item()),
-                            n_steps=20, sigma_max=sigma_max,
-                            parameterization=parameterization,
-                        ))
-                    z_hat = torch.cat(z_hats, dim=0)
-                else:
-                    z_hat = bridge_inference(model, z_acc_sample, n_steps=20, sigma_max=sigma_max,
-                                             parameterization=parameterization)
+                z_hats = []
+                for b in range(z_acc_sample.shape[0]):
+                    z_hats.append(bridge_inference(
+                        model, z_acc_sample[b:b+1],
+                        T_l2=int(l2_speech_end_sample[b].item()),
+                        T_nat=int(nat_speech_end_sample[b].item()),
+                        n_steps=20, sigma_max=sigma_max,
+                        parameterization=parameterization,
+                    ))
+                z_hat = torch.cat(z_hats, dim=0)
                 L = z_hat.shape[1]
                 sp_mask = (torch.arange(L, device=device).unsqueeze(0)
                            < nat_speech_end_sample.unsqueeze(1))  # [B, L]

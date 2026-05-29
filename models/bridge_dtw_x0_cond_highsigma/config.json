@@ -15,6 +15,6 @@
   "dim_feedforward": 3072,
   "patience": 5,
   "seed": 42,
-  "notes": "x0-prediction with cond_acc, masked noise, DTW alpha-timeline alignment, sigma_max=2.0, tail_weight=0.3, fixed ODE step, fixed l2 padding, d_model=768",
-  "tail_weight": 0.3
+  "notes": "x0-prediction, masked noise, DTW alpha-timeline alignment, sigma_max=2.0, tail_weight=0.0, fixed ODE step, fixed l2 padding, d_model=768",
+  "tail_weight": 0.0
 }

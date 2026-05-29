@@ -3,12 +3,16 @@
 Latent steering experiment runner.
 
 Methods:
-  position  — frame-by-frame blend of full 1500-frame sequences; no tail option
-  dtw       — DTW-aligned speech frames + configurable tail (--tail l2|english|interpolate)
-  full_dtw  — DTW aligned across all 1500 frames; no tail handling needed
+  position     — frame-by-frame blend of full 1500-frame sequences; no tail option
+  position_fixed — positional blend up to max(T_l2, T_eng); L2 tail
+  position_nt  — positional blend up to N(alpha) = round((1-a)*T_l2 + a*T_eng); L2 silence tail
+  dtw          — DTW-aligned speech frames + configurable tail (--tail l2|english|interpolate)
+  full_dtw     — DTW aligned across all 1500 frames; no tail handling needed
 
 Output files:
   {out_dir}/{decoder}_position_steering.csv
+  {out_dir}/{decoder}_position_fixed_steering.csv
+  {out_dir}/{decoder}_position_nt_steering.csv
   {out_dir}/{decoder}_dtw_{tail}_steering.csv
   {out_dir}/{decoder}_full_dtw_steering.csv
 
@@ -237,7 +241,8 @@ def run_position_fixed(mapping: dict, ref_data: dict, decode: Callable) -> list[
                     try:
                         speech = ((1 - alpha) * l2_full[:t_max]
                                   + alpha * eng_full[:t_max]).astype(np.float32)
-                        padded = np.vstack([speech, l2_full[t_max:].astype(np.float32)])
+                        l2_sil = _extend_sil(l2_full[l2_end:], 1500 - t_max)
+                        padded = np.vstack([speech, l2_sil])
                         pred   = decode(padded)
                         rows.append({"prompt_id": prompt_id, "L1": l1,
                                      "speaker": info["speaker"], "alpha": alpha,
@@ -280,6 +285,63 @@ def run_position(mapping: dict, ref_data: dict, decode: Callable) -> list[dict]:
                     try:
                         steered = ((1 - alpha) * l2_full + alpha * eng_full).astype(np.float32)
                         pred    = decode(steered)
+                        rows.append({"prompt_id": prompt_id, "L1": l1,
+                                     "speaker": info["speaker"], "alpha": alpha,
+                                     "wer": jiwer.wer(norm_ref, norm(pred))})
+                    except Exception as e:
+                        print(f"  [warn] {prompt_id}/{l1}/alpha={alpha}: {e}")
+                    pbar.update(1)
+
+    return rows
+
+
+def run_position_nt(mapping: dict, ref_data: dict, decode: Callable) -> list[dict]:
+    """Position blend with N(alpha)-varying active region, matching DTW's masking convention.
+
+    N(alpha) = round((1-alpha)*T_l2 + alpha*T_eng) frames blended positionally.
+    Tail [N:] is always L2 silence (_extend_sil(l2_full[T_l2:], ...)), same as DTW's
+    _apply_mask — isolates whether N(t) masking helps independent of DTW alignment.
+    """
+    print("[run_steering] Running position N(t) steering...")
+    total = sum(_n_l2(l1d) * len(ALPHA_VALUES) for l1d in mapping.values())
+    rows  = []
+
+    with tqdm(total=total, unit="decode") as pbar:
+        for prompt_id, l1d in mapping.items():
+            eng_info = l1d["English"]
+            eng_end  = eng_info.get("speech_end_frame")
+            if not eng_end or not Path(eng_info["path"]).exists():
+                pbar.update(_n_l2(l1d) * len(ALPHA_VALUES)); continue
+            try:
+                eng_full = load_checkpoint(eng_info["path"])
+            except Exception:
+                pbar.update(_n_l2(l1d) * len(ALPHA_VALUES)); continue
+
+            for l1, info in l1d.items():
+                if l1 == "English":
+                    continue
+                l2_end = info.get("speech_end_frame")
+                ref    = ref_data.get((prompt_id, info["speaker"]))
+                if not l2_end or ref is None or not Path(info["path"]).exists():
+                    pbar.update(len(ALPHA_VALUES)); continue
+                try:
+                    l2_full = load_checkpoint(info["path"])
+                except Exception:
+                    pbar.update(len(ALPHA_VALUES)); continue
+
+                norm_ref = norm(ref)
+                for alpha in ALPHA_VALUES:
+                    try:
+                        N      = max(1, round((1 - alpha) * l2_end + alpha * eng_end))
+                        speech = ((1 - alpha) * l2_full[:N]
+                                  + alpha * eng_full[:N]).astype(np.float32)
+                        need   = 1500 - N
+                        if need > 0:
+                            l2_sil = _extend_sil(l2_full[l2_end:], need)
+                            padded = np.vstack([speech, l2_sil])
+                        else:
+                            padded = speech[:1500]
+                        pred   = decode(padded)
                         rows.append({"prompt_id": prompt_id, "L1": l1,
                                      "speaker": info["speaker"], "alpha": alpha,
                                      "wer": jiwer.wer(norm_ref, norm(pred))})
@@ -421,7 +483,7 @@ def run_dtw_full(mapping: dict, ref_data: dict, decode: Callable,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--decoder",      required=True, choices=["whisper", "whisfusion"])
-    parser.add_argument("--method",       required=True, choices=["position", "position_fixed", "dtw", "full_dtw"])
+    parser.add_argument("--method",       required=True, choices=["position", "position_fixed", "position_nt", "dtw", "full_dtw"])
     parser.add_argument("--tail",         default="l2",  choices=["l2", "english", "interpolate"],
                         help="Tail/padding strategy for --method dtw only. "
                              "Ignored for position (blends all 1500 frames), "
@@ -456,6 +518,8 @@ def main():
         cache_path = out_dir / f"{args.decoder}_full_dtw_steering.csv"
     elif args.method == "position_fixed":
         cache_path = out_dir / f"{args.decoder}_position_fixed_steering.csv"
+    elif args.method == "position_nt":
+        cache_path = out_dir / f"{args.decoder}_position_nt_steering.csv"
     else:
         cache_path = out_dir / f"{args.decoder}_position_steering.csv"
 
@@ -478,6 +542,8 @@ def main():
         rows = run_position(mapping, ref_data, decode)
     elif args.method == "position_fixed":
         rows = run_position_fixed(mapping, ref_data, decode)
+    elif args.method == "position_nt":
+        rows = run_position_nt(mapping, ref_data, decode)
     elif args.method == "full_dtw":
         rows = run_dtw_full(mapping, ref_data, decode, window=args.window)
     else:

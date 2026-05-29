@@ -26,9 +26,19 @@ mkdir -p logs
 #         --num_prompts 100 --out_dir results/e2_steering
 # done
 
+# Delete stale caches so rerun is forced (tail logic changed for position_fixed;
+# position_nt is new)
+rm -f results/e2_steering/whisper_position_fixed_steering.csv
+rm -f results/e2_steering/whisper_position_nt_steering.csv
+
 echo "[Job] whisper position_fixed"
 python src/analysis/run_steering.py \
     --decoder whisper --method position_fixed \
-    --num_prompts 30 --out_dir results/e2_steering
+    --num_prompts 100 --out_dir results/e2_steering
+
+echo "[Job] whisper position_nt"
+python src/analysis/run_steering.py \
+    --decoder whisper --method position_nt \
+    --num_prompts 100 --out_dir results/e2_steering
 
 echo "[Job] Done at $(date)"
