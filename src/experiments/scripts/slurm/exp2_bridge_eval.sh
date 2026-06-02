@@ -3,7 +3,7 @@
 #SBATCH --partition=a30
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=16G
+#SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/exp2_bridge_eval_%j.out
 #SBATCH --error=logs/exp2_bridge_eval_%j.out
@@ -45,7 +45,7 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
-MODELS=( "bridge_position_x0_cond_lowsigma")
+MODELS=( "bridge_dtw_eps_sde_sig1.5" )
 
 for MODEL in "${MODELS[@]}"; do
     python -m src.experiments.exp2_latent_diffusion_bridge.eval \
@@ -53,7 +53,7 @@ for MODEL in "${MODELS[@]}"; do
         --predictor_ckpt models/tnat_predictor/model_best.pt \
         --output_dir     results/bridge_eval \
         --output_file    "$MODEL".csv \
-        --n_steps        20 \
+        --n_steps        100 \
         --max_utts_per_speaker 50 \
         --tnat_buffer   35
 done

@@ -115,10 +115,11 @@ class BridgeDataset(Dataset):
 
         l2_speech_end  = pair["l2_speech_end_frame"]
         nat_speech_end = pair["nat_speech_end_frame"]
+        slot_id        = pair["l2_encoder_state_path"]  # unique per L2 utterance; used for min-over-natives val
 
         if self.alignment.startswith("dtw"):
             key      = (pair["l2_encoder_state_path"], pair["nat_encoder_state_path"])
             path_arr = self._dtw_paths[key]  # [P, 2] int16 — in-memory dict lookup
-            return z_acc, z_nat, l2_speech_end, nat_speech_end, path_arr
+            return z_acc, z_nat, l2_speech_end, nat_speech_end, path_arr, slot_id
 
-        return z_acc, z_nat, l2_speech_end, nat_speech_end
+        return z_acc, z_nat, l2_speech_end, nat_speech_end, slot_id

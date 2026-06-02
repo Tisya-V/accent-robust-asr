@@ -7,6 +7,7 @@ Plain PyTorch with bf16 AMP, gradient clipping, and checkpoint resumption.
 import argparse
 import json
 import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -27,19 +28,20 @@ from .dataset import BridgeDataset
 
 
 def collate_fn(batch):
-    """Stack batch into tensors (position alignment)."""
-    z_accs, z_nats, l2_ends, nat_ends = zip(*batch)
+    """Stack batch into tensors (position alignment). Returns slot_ids as list of strings."""
+    z_accs, z_nats, l2_ends, nat_ends, slot_ids = zip(*batch)
     return (
         torch.stack(z_accs),        # [B, 1500, 768]
         torch.stack(z_nats),        # [B, 1500, 768]
         torch.tensor(l2_ends),      # [B]
         torch.tensor(nat_ends),     # [B]
+        list(slot_ids),             # [B] list of str — l2_encoder_state_path
     )
 
 
 def collate_fn_dtw(batch):
-    """Stack tensors and pad DTW paths to [B, max_P, 2] for batched GPU ops."""
-    z_accs, z_nats, l2_ends, nat_ends, paths = zip(*batch)
+    """Stack tensors and pad DTW paths to [B, max_P, 2] for batched GPU ops. Returns slot_ids."""
+    z_accs, z_nats, l2_ends, nat_ends, paths, slot_ids = zip(*batch)
     max_P  = max(len(p) for p in paths)
     padded = np.zeros((len(paths), max_P, 2), dtype=np.int16)
     for i, p in enumerate(paths):
@@ -51,6 +53,7 @@ def collate_fn_dtw(batch):
         torch.tensor(l2_ends),          # [B]
         torch.tensor(nat_ends),         # [B]
         torch.from_numpy(padded),       # [B, max_P, 2] int16
+        list(slot_ids),                 # [B] list of str — l2_encoder_state_path
     )
 
 
@@ -147,10 +150,10 @@ _DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english"}
 
 
 def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
-                  tail_weight=0.3):
-    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, tail_loss)."""
+                  tail_weight=0.3, lambda_v=0.0):
+    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, tail_loss, vel_loss)."""
     if alignment.startswith("dtw"):
-        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor = batch
+        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
@@ -160,9 +163,9 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                                path_tensor, sigma_max=sigma_max,
                                parameterization=parameterization, dtw_tail=dtw_tail,
-                               tail_weight=tail_weight)
+                               tail_weight=tail_weight, lambda_v=lambda_v)
     else:
-        z_acc, z_nat, l2_speech_end, nat_speech_end = batch
+        z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
@@ -170,6 +173,32 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                            sigma_max=sigma_max, parameterization=parameterization,
                            tail_weight=tail_weight)
+
+
+def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
+                              parameterization="eps", tail_weight=0.3) -> torch.Tensor:
+    """Return per-sample losses [B] for min-over-natives val computation."""
+    if alignment.startswith("dtw"):
+        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids = batch
+        z_acc          = z_acc.to(device, non_blocking=True)
+        z_nat          = z_nat.to(device, non_blocking=True)
+        l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
+        nat_speech_end = nat_speech_end.to(device, non_blocking=True)
+        path_tensor    = path_tensor.to(device, non_blocking=True)
+        dtw_tail       = _DTW_TAIL_MAP.get(alignment, "l2")
+        return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
+                               path_tensor, sigma_max=sigma_max,
+                               parameterization=parameterization, dtw_tail=dtw_tail,
+                               tail_weight=tail_weight, per_sample=True)
+    else:
+        z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
+        z_acc          = z_acc.to(device, non_blocking=True)
+        z_nat          = z_nat.to(device, non_blocking=True)
+        l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
+        nat_speech_end = nat_speech_end.to(device, non_blocking=True)
+        return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
+                           sigma_max=sigma_max, parameterization=parameterization,
+                           tail_weight=tail_weight, per_sample=True)
 
 
 def train_epoch(
@@ -181,10 +210,11 @@ def train_epoch(
     alignment: str = "position",
     parameterization: str = "eps",
     tail_weight: float = 0.3,
-) -> tuple[float, float, float]:
-    """Train for one epoch. Returns (avg_total, avg_speech, avg_tail)."""
+    lambda_v: float = 0.0,
+) -> tuple[float, float, float, float]:
+    """Train for one epoch. Returns (avg_total, avg_speech, avg_tail, avg_vel)."""
     model.train()
-    total_loss = speech_loss_sum = tail_loss_sum = 0.0
+    total_loss = speech_loss_sum = tail_loss_sum = vel_loss_sum = 0.0
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
@@ -192,8 +222,8 @@ def train_epoch(
         optimizer.zero_grad()
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss, sp_loss, tl_loss = _compute_loss(
-                model, batch, device, sigma_max, alignment, parameterization, tail_weight)
+            loss, sp_loss, tl_loss, vel_loss = _compute_loss(
+                model, batch, device, sigma_max, alignment, parameterization, tail_weight, lambda_v)
 
         loss.backward()
         clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -202,11 +232,18 @@ def train_epoch(
         total_loss    += loss.item()
         speech_loss_sum += sp_loss
         tail_loss_sum   += tl_loss
+        vel_loss_sum    += vel_loss
         num_batches += 1
-        pbar.set_postfix({"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}", "tl": f"{tl_loss:.4f}"})
+
+        postfix = {"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}"}
+        if tail_weight > 0:
+            postfix["tl"] = f"{tl_loss:.4f}"
+        if lambda_v > 0:
+            postfix["vl"] = f"{vel_loss:.4f}"
+        pbar.set_postfix(postfix)
 
     pbar.close()
-    return total_loss / num_batches, speech_loss_sum / num_batches, tail_loss_sum / num_batches
+    return total_loss / num_batches, speech_loss_sum / num_batches, tail_loss_sum / num_batches, vel_loss_sum / num_batches
 
 
 def train_epoch_profile(
@@ -317,25 +354,35 @@ def val_epoch(
     alignment: str = "position",
     parameterization: str = "eps",
     tail_weight: float = 0.3,
+    lambda_v: float = 0.0,  # unused in val; kept for call-site consistency
 ) -> tuple[float, float, float]:
-    """Validate for one epoch. Returns (avg_total, avg_speech, avg_tail)."""
+    """Validate with min-over-natives loss.
+
+    For each L2 utterance slot (identified by l2_encoder_state_path), takes the
+    minimum loss over all native speaker pairings present in the val set. This
+    measures 'can the model map to any valid native realization?' rather than
+    penalising a correct CLB output when the val entry happens to be SLT.
+
+    Returns (avg_min_slot_loss, 0.0, 0.0). Speech/tail breakdown not available
+    per-sample; the 0.0 placeholders preserve the return type for save_history.
+    """
     model.eval()
-    total_loss = speech_loss_sum = tail_loss_sum = 0.0
-    num_batches = 0
+    slot_losses: dict[str, list[float]] = defaultdict(list)
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
         for batch in pbar:
+            slot_ids = batch[-1]  # list of str, last element from collate_fn / collate_fn_dtw
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss, sp_loss, tl_loss = _compute_loss(
+                per_sample = _compute_loss_per_sample(
                     model, batch, device, sigma_max, alignment, parameterization, tail_weight)
-            total_loss    += loss.item()
-            speech_loss_sum += sp_loss
-            tail_loss_sum   += tl_loss
-            num_batches += 1
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}", "tl": f"{tl_loss:.4f}"})
+            for loss_val, sid in zip(per_sample.tolist(), slot_ids):
+                slot_losses[sid].append(loss_val)
+            pbar.set_postfix({"slots": len(slot_losses), "cur_min": f"{per_sample.min().item():.4f}"})
 
-    return total_loss / num_batches, speech_loss_sum / num_batches, tail_loss_sum / num_batches
+    slot_min  = [min(v) for v in slot_losses.values()]
+    val_loss  = sum(slot_min) / max(len(slot_min), 1)
+    return val_loss, 0.0, 0.0
 
 
 def train(
@@ -361,6 +408,7 @@ def train(
     patience: int = 5,
     seed: int = 42,
     tail_weight: float = 0.3,
+    lambda_v: float = 0.0,
 ):
     """
     Train the bridge model.
@@ -487,8 +535,14 @@ def train(
         "seed": seed,
         "notes": notes,
         "tail_weight": tail_weight,
+        "lambda_v": lambda_v,
     }
     save_config(out_dir / "config.json", **config)
+
+    if lambda_v > 0.0 and not alignment.startswith("dtw"):
+        raise ValueError("lambda_v > 0 requires --alignment dtw (velocity loss is DTW-only)")
+    if parameterization == "cfm_prewarp" and not alignment.startswith("dtw"):
+        raise ValueError("--parameterization cfm_prewarp requires --alignment dtw")
 
     # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
     # Use generic indexing — batch is 4-tuple (position) or 5-tuple (dtw)
@@ -497,15 +551,57 @@ def train(
     z_nat_sample          = sample_batch[1][:32].to(device, non_blocking=True)
     l2_speech_end_sample  = sample_batch[2][:32]   # keep on CPU — used as Python ints
     nat_speech_end_sample = sample_batch[3][:32].to(device, non_blocking=True)
+    # DTW paths for cfm_prewarp: needed to compute z_nat_warped diagnostic
+    path_sample = sample_batch[4][:32].to(device, non_blocking=True) if alignment.startswith("dtw") else None
 
-    # Baseline cosine similarity: how similar are z_acc and z_nat before any bridge correction?
-    # Mask to T_nat (not T_l2): consistent with steering notebook cos_sim_speech(., ., nat_end).
+    # For cfm_prewarp: precompute z_nat_warped (DTW-aligned native frames on L2 timeline)
+    # used as the primary reference for cosine sim (not position-aligned z_nat).
+    z_nat_warped_sample = None
+    if parameterization == "cfm_prewarp" and path_sample is not None:
+        with torch.no_grad():
+            B_s   = z_nat_sample.shape[0]
+            max_P = path_sample.shape[1]
+            T_l2s = l2_speech_end_sample.float().to(device)
+            T_nts = nat_speech_end_sample.float()
+            l2_n  = path_sample[:, :, 1].float() / (T_l2s - 1).clamp(min=1).unsqueeze(1)
+            max_l2s = int(T_l2s.max())
+            kg    = torch.arange(max_l2s, device=device, dtype=torch.float32).unsqueeze(0)
+            ot    = (kg / (T_l2s - 1).clamp(min=1).unsqueeze(1)).clamp(max=1.0)
+            ir    = torch.searchsorted(l2_n.contiguous(), ot.contiguous()).clamp(0, max_P - 1)
+            il    = (ir - 1).clamp(0, max_P - 1)
+            ki    = torch.where((torch.gather(l2_n, 1, il) - ot).abs()
+                                <= (torch.gather(l2_n, 1, ir) - ot).abs(), il, ir)
+            ni    = torch.gather(path_sample[:, :, 0].long(), 1, ki)
+            D_s   = z_nat_sample.shape[-1]
+            max_l_s = z_nat_sample.shape[1]
+            z_nat_warped_sample = torch.gather(
+                z_nat_sample, 1, ni.clamp(0, max_l_s - 1).unsqueeze(-1).expand(-1, -1, D_s)
+            )  # [B, max_l2, D]
+
+    # Baseline cosine similarity before any bridge correction.
+    # cfm_prewarp: mask to T_l2 (L2 timeline) and also show cos vs z_nat_warped target.
+    # Other parameterizations: mask to T_nat, cos vs z_nat.
     baseline_sim = None
     if z_acc_sample is not None:
-        mask = torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0) < nat_speech_end_sample.unsqueeze(1)
-        sim_per = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
-        baseline_sim = sim_per.mean().item()
-        print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
+        if parameterization == "cfm_prewarp":
+            mask = (torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0)
+                    < l2_speech_end_sample.to(device).unsqueeze(1))
+            sim_pos = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
+            print(f"[Train] Baseline cos(z_acc, z_nat) on L2 frames:        {sim_pos.mean().item():.4f}")
+            if z_nat_warped_sample is not None:
+                mw    = mask[:, :z_nat_warped_sample.shape[1]]
+                sw    = (F.cosine_similarity(z_acc_sample[:, :z_nat_warped_sample.shape[1]],
+                                             z_nat_warped_sample, dim=-1) * mw).sum(1) / mw.sum(1).float()
+                baseline_sim = sw.mean().item()  # primary baseline: gap to actual training target
+                print(f"[Train] Baseline cos(z_acc, z_nat_warped) on L2 frames: {baseline_sim:.4f}")
+            else:
+                baseline_sim = sim_pos.mean().item()
+        else:
+            mask = (torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0)
+                    < nat_speech_end_sample.unsqueeze(1))
+            sim_per = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
+            baseline_sim = sim_per.mean().item()
+            print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
 
     # Training loop with loss history
     train_losses = []; train_speech_losses = []; train_tail_losses = []
@@ -521,18 +617,24 @@ def train(
             train_loss = train_epoch_profile(model, train_loader, optimizer, device, sigma_max=sigma_max)
             break  # Profile only runs once
         else:
-            train_loss, tr_sp, tr_tl = train_epoch(
+            train_loss, tr_sp, tr_tl, tr_vl = train_epoch(
                 model, train_loader, optimizer, device,
                 sigma_max=sigma_max, alignment=alignment,
-                parameterization=parameterization, tail_weight=tail_weight)
-        print(f"  Train loss: {train_loss:.6f}  (speech={tr_sp:.6f}  tail={tr_tl:.6f})")
+                parameterization=parameterization, tail_weight=tail_weight,
+                lambda_v=lambda_v)
+        parts = [f"speech={tr_sp:.6f}"]
+        if tail_weight > 0:
+            parts.append(f"tail={tr_tl:.6f}")
+        if lambda_v > 0:
+            parts.append(f"dir={tr_vl:.6f}")
+        print(f"  Train loss: {train_loss:.6f}  ({',  '.join(parts)})")
         train_losses.append(train_loss); train_speech_losses.append(tr_sp); train_tail_losses.append(tr_tl)
 
-        # Validate
+        # Validate (min-over-natives — speech/tail breakdown not available)
         val_loss, val_sp, val_tl = val_epoch(
             model, val_loader, device, sigma_max=sigma_max, alignment=alignment,
-            parameterization=parameterization, tail_weight=tail_weight)
-        print(f"  Val loss:   {val_loss:.6f}  (speech={val_sp:.6f}  tail={val_tl:.6f})")
+            parameterization=parameterization, tail_weight=tail_weight, lambda_v=lambda_v)
+        print(f"  Val loss (min-over-natives): {val_loss:.6f}")
         val_losses.append(val_loss); val_speech_losses.append(val_sp); val_tail_losses.append(val_tl)
 
         # Sanity check: cosine sim + prediction scale on fixed sample mini-batch
@@ -550,16 +652,37 @@ def train(
                     ))
                 z_hat = torch.cat(z_hats, dim=0)
                 L = z_hat.shape[1]
-                sp_mask = (torch.arange(L, device=device).unsqueeze(0)
-                           < nat_speech_end_sample.unsqueeze(1))  # [B, L]
 
-                # Cosine sim (speech frames, z_hat vs z_nat)
-                sim_per = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * sp_mask).sum(1) \
-                          / sp_mask.sum(1).float()
-                sim = sim_per.mean().item()
-                cosine_sims[str(epoch + 1)] = sim
-                baseline_str = f" (baseline: {baseline_sim:.4f})" if baseline_sim is not None else ""
-                print(f"  Cosine sim (speech, z_hat vs z_nat): {sim:.4f}{baseline_str}")
+                # cfm_prewarp: output lives on L2 timeline — mask and reference differ
+                if parameterization == "cfm_prewarp":
+                    sp_mask = (torch.arange(L, device=device).unsqueeze(0)
+                               < l2_speech_end_sample.to(device).unsqueeze(1))  # [B, L]
+                    # Primary: cos(z_hat, z_nat_warped) — the actual training target
+                    if z_nat_warped_sample is not None:
+                        mw      = sp_mask[:, :z_nat_warped_sample.shape[1]]
+                        sim_w   = (F.cosine_similarity(z_hat[:, :z_nat_warped_sample.shape[1]],
+                                                       z_nat_warped_sample, dim=-1) * mw).sum(1) \
+                                  / mw.sum(1).float()
+                        sim_warp = sim_w.mean().item()
+                    else:
+                        sim_warp = float("nan")
+                    # Secondary: cos(z_hat, z_nat) position-aligned — for comparison only
+                    sim_pos = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * sp_mask).sum(1) \
+                              / sp_mask.sum(1).float()
+                    sim = sim_warp  # primary metric stored in history
+                    cosine_sims[str(epoch + 1)] = sim
+                    baseline_str = f" (baseline: {baseline_sim:.4f})" if baseline_sim is not None else ""
+                    print(f"  Cosine sim vs z_nat_warped (primary): {sim_warp:.4f}{baseline_str}")
+                    print(f"  Cosine sim vs z_nat pos-aligned (ref): {sim_pos.mean().item():.4f}")
+                else:
+                    sp_mask = (torch.arange(L, device=device).unsqueeze(0)
+                               < nat_speech_end_sample.unsqueeze(1))  # [B, L]
+                    sim_per = (F.cosine_similarity(z_hat, z_nat_sample, dim=-1) * sp_mask).sum(1) \
+                              / sp_mask.sum(1).float()
+                    sim = sim_per.mean().item()
+                    cosine_sims[str(epoch + 1)] = sim
+                    baseline_str = f" (baseline: {baseline_sim:.4f})" if baseline_sim is not None else ""
+                    print(f"  Cosine sim (speech, z_hat vs z_nat): {sim:.4f}{baseline_str}")
 
                 # Scale check: mean per-frame L2 norm, speech and tail separately
                 def _mean_norm(z, mask):
@@ -643,8 +766,10 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
     parser.add_argument("--sigma_max", type=float, default=2.0, help="Bridge noise scale — set to per-element std of (z_acc - z_nat)")
     parser.add_argument("--cond_acc", action="store_true", default=False, help="Condition on z_acc (I²SB cond_acc): concatenate z_acc to z_t before proj_in")
-    parser.add_argument("--parameterization", type=str, default="eps", choices=["eps", "x0"],
-                        help="Model parameterization: eps (epsilon-prediction) or x0 (direct z_nat prediction)")
+    parser.add_argument("--parameterization", type=str, default="eps", choices=["eps", "x0", "cfm", "cfm_prewarp"],
+                        help="Model parameterization: eps (epsilon-prediction), x0 (direct z_nat prediction), "
+                             "cfm (OT flow matching: DTW morphing timeline), "
+                             "cfm_prewarp (OT flow matching: fixed L2 timeline, DTW-warped native target)")
     parser.add_argument("--d_model", type=int, default=256, help="Transformer hidden dim")
     parser.add_argument("--n_layers", type=int, default=4, help="Number of transformer layers")
     parser.add_argument("--n_heads", type=int, default=8, help="Number of attention heads")
@@ -655,6 +780,8 @@ if __name__ == "__main__":
     parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (epochs without val loss improvement)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--tail_weight", type=float, default=0.3, help="Loss weight for tail frames [T_nat:] relative to speech frames [0:T_nat] (1.0 = equal)")
+    parser.add_argument("--lambda_v", type=float, default=0.0,
+                        help="Weight of DTW-velocity auxiliary loss (Branch B; requires --alignment dtw --parameterization x0). 0.0 = disabled.")
 
     args = parser.parse_args()
     if args.out_dir is None:

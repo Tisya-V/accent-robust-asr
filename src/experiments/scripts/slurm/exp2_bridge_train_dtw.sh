@@ -26,12 +26,15 @@ echo "Track: tail -f ${RUNTIME_LOG}"
 echo "=========================================="
 
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
+    --mapping_train_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_train_v2.json \
+    --mapping_val_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev_v2.json \
     --alignment       dtw \
     --cond_acc            \
     --parameterization eps \
-    --out_dir         models/bridge_dtw_eps_lowsigma \
+    --out_dir         models/bridge_dtw_eps_sde_sig1.5 \
     --d_model         768 \
     --dim_feedforward 3072 \
+    --n_layers        4 \
     --n_heads         12 \
     --n_epochs        15 \
     --batch_size      64 \
@@ -41,6 +44,7 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --num_workers     6 \
     --patience        5 \
     --tail_weight     0.0 \
-    --notes           "eps-prediction, masked noise, DTW alpha-timeline alignment, sigma_max=1.5, tail_weight=0.0, fixed ODE step, fixed l2 padding, d_model=768"
+    --lambda_v        0.0 \
+    --notes           "v2 data, eps param with sigma=1.5, stochastic inference"
 
 echo "Done at $(date)"

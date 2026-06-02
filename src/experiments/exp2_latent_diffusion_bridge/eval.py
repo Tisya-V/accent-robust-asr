@@ -48,6 +48,7 @@ _G2P = g2p_en.G2p()
 
 def text_to_phones(text: str) -> list[str]:
     """Normalised text → ARPAbet phone list (stress digits stripped)."""
+    text = re.sub(r"\d+", "", text)  # inflect raises NumOutOfRangeError on large numbers
     raw = _G2P(text)
     return [p.rstrip("012") for p in raw if p.strip() and p[0].isalpha()]
 
@@ -352,6 +353,10 @@ def evaluate_bridge(
     for u in test_utts:
         u.setdefault("wav_path", "")  # not needed for eval, only for CSV output
 
+    # BDL (English native) appears as both l2_test and native_sanity_check — drop the l2_test duplicate
+    # before subsampling so the full native_sanity_check pool is available for sampling.
+    test_utts = [u for u in test_utts if not (u.get("eval_type") == "l2_test" and u.get("l1") == "English")]
+
     if max_utts_per_speaker is not None:
         import random as _random
         by_speaker: dict = {}
@@ -362,7 +367,6 @@ def evaluate_bridge(
             _random.seed(42)
             test_utts.extend(_random.sample(utts, min(max_utts_per_speaker, len(utts))))
         print(f"  Subsampled to {max_utts_per_speaker} utts/speaker")
-
     print(f"  {len(test_utts)} test utterances from {len(set(u['speaker'] for u in test_utts))} speakers")
 
     # Run inference
