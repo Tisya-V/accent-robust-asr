@@ -7,6 +7,8 @@ Methods:
   position_fixed — positional blend up to max(T_l2, T_eng); L2 tail
   position_nt  — positional blend up to N(alpha) = round((1-a)*T_l2 + a*T_eng); L2 silence tail
   dtw          — DTW-aligned speech frames + configurable tail (--tail l2|english|interpolate)
+  dtw_fixed    — fixed DTW mapping on L2 timeline; blend each L2 frame towards its DTW-matched
+                 native frame; output always T_l2 frames + L2 silence tail; no N(alpha) morphing
   full_dtw     — DTW aligned across all 1500 frames; no tail handling needed
 
 Output files:
@@ -14,6 +16,7 @@ Output files:
   {out_dir}/{decoder}_position_fixed_steering.csv
   {out_dir}/{decoder}_position_nt_steering.csv
   {out_dir}/{decoder}_dtw_{tail}_steering.csv
+  {out_dir}/{decoder}_dtw_fixed_steering.csv
   {out_dir}/{decoder}_full_dtw_steering.csv
 
 Re-running is a no-op if the output file already exists.
@@ -416,6 +419,82 @@ def run_dtw(mapping: dict, ref_data: dict, decode: Callable,
     return rows
 
 
+def run_dtw_fixed(mapping: dict, ref_data: dict, decode: Callable,
+                  window: int | None = None) -> list[dict]:
+    """DTW-fixed steering: freeze DTW mapping on L2 timeline, blend towards native in-place.
+
+    For each L2 speech frame k, find its DTW-matched native frame nat_idx[k] by projecting
+    the warping path onto the L2 frame grid (nearest-neighbour on j_norm). This is computed
+    once per pair. Then for each alpha:
+
+        steered[k] = (1-alpha)*z_l2[k] + alpha*z_nat[nat_idx[k]]
+
+    Output is always T_l2 speech frames + original L2 silence padding to 1500.
+    No N(alpha) morphing — tests whether the fixed-L2-timeline approach (used by the
+    planned dtw_fixed bridge variant) retains coherent blend properties.
+    """
+    from dtaidistance import dtw_ndim
+
+    print(f"[run_steering] Running fixed-timeline DTW steering (window={window})...")
+    total = sum(_n_l2(l1d) * len(ALPHA_VALUES) for l1d in mapping.values())
+    rows  = []
+
+    with tqdm(total=total, unit="decode") as pbar:
+        for prompt_id, l1d in mapping.items():
+            eng_info = l1d["English"]
+            eng_end  = eng_info.get("speech_end_frame")
+            if not eng_end or not Path(eng_info["path"]).exists():
+                pbar.update(_n_l2(l1d) * len(ALPHA_VALUES)); continue
+            try:
+                eng_full  = load_checkpoint(eng_info["path"])
+                eng_state = eng_full[:eng_end]
+            except Exception:
+                pbar.update(_n_l2(l1d) * len(ALPHA_VALUES)); continue
+
+            for l1, info in l1d.items():
+                if l1 == "English":
+                    continue
+                l2_end = info.get("speech_end_frame")
+                ref    = ref_data.get((prompt_id, info["speaker"]))
+                if not l2_end or ref is None or not Path(info["path"]).exists():
+                    pbar.update(len(ALPHA_VALUES)); continue
+                try:
+                    l2_full  = load_checkpoint(info["path"])
+                    l2_state = l2_full[:l2_end]
+                except Exception:
+                    pbar.update(len(ALPHA_VALUES)); continue
+
+                path_arr = np.array(dtw_ndim.warping_path(eng_state, l2_state, window=window))
+                T_l2 = len(l2_state)
+
+                # Project path onto L2 grid: for each L2 frame k, find nearest path point
+                j_norm  = path_arr[:, 1].astype(np.float32) / max(T_l2 - 1, 1)
+                out_t   = np.linspace(0.0, 1.0, T_l2, dtype=np.float32)
+                idx_r   = np.clip(np.searchsorted(j_norm, out_t), 0, len(j_norm) - 1)
+                idx_l   = np.clip(idx_r - 1, 0, len(j_norm) - 1)
+                k_idx   = np.where(
+                    np.abs(j_norm[idx_l] - out_t) <= np.abs(j_norm[idx_r] - out_t),
+                    idx_l, idx_r)
+                nat_idx = path_arr[k_idx, 0]  # fixed: nat frame for each L2 frame k
+
+                norm_ref = norm(ref)
+                for alpha in ALPHA_VALUES:
+                    try:
+                        speech = ((1 - alpha) * l2_state
+                                  + alpha * eng_state[nat_idx]).astype(np.float32)
+                        padded = pad_to_1500(speech, l2_full, l2_end,
+                                             eng_full, eng_end, alpha, tail="l2")
+                        pred   = decode(padded)
+                        rows.append({"prompt_id": prompt_id, "L1": l1,
+                                     "speaker": info["speaker"], "alpha": alpha,
+                                     "wer": jiwer.wer(norm_ref, norm(pred))})
+                    except Exception as e:
+                        print(f"  [warn] {prompt_id}/{l1}/alpha={alpha}: {e}")
+                    pbar.update(1)
+
+    return rows
+
+
 def run_dtw_full(mapping: dict, ref_data: dict, decode: Callable,
                  window: int | None = None) -> list[dict]:
     """DTW across all 1500 frames — no speech-end detection, no tail handling.
@@ -483,7 +562,7 @@ def run_dtw_full(mapping: dict, ref_data: dict, decode: Callable,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--decoder",      required=True, choices=["whisper", "whisfusion"])
-    parser.add_argument("--method",       required=True, choices=["position", "position_fixed", "position_nt", "dtw", "full_dtw"])
+    parser.add_argument("--method",       required=True, choices=["position", "position_fixed", "position_nt", "dtw", "dtw_fixed", "full_dtw"])
     parser.add_argument("--tail",         default="l2",  choices=["l2", "english", "interpolate"],
                         help="Tail/padding strategy for --method dtw only. "
                              "Ignored for position (blends all 1500 frames), "
@@ -514,6 +593,8 @@ def main():
 
     if args.method == "dtw":
         cache_path = out_dir / f"{args.decoder}_dtw_{args.tail}_steering.csv"
+    elif args.method == "dtw_fixed":
+        cache_path = out_dir / f"{args.decoder}_dtw_fixed_steering.csv"
     elif args.method == "full_dtw":
         cache_path = out_dir / f"{args.decoder}_full_dtw_steering.csv"
     elif args.method == "position_fixed":
@@ -544,6 +625,8 @@ def main():
         rows = run_position_fixed(mapping, ref_data, decode)
     elif args.method == "position_nt":
         rows = run_position_nt(mapping, ref_data, decode)
+    elif args.method == "dtw_fixed":
+        rows = run_dtw_fixed(mapping, ref_data, decode, window=args.window)
     elif args.method == "full_dtw":
         rows = run_dtw_full(mapping, ref_data, decode, window=args.window)
     else:

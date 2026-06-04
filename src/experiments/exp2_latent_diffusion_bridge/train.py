@@ -146,7 +146,7 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
     plt.close()
 
 
-_DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english"}
+_DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english", "dtw_fixed": "l2"}
 
 
 def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
@@ -162,8 +162,8 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         dtw_tail       = _DTW_TAIL_MAP.get(alignment, "l2")
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                                path_tensor, sigma_max=sigma_max,
-                               parameterization=parameterization, dtw_tail=dtw_tail,
-                               tail_weight=tail_weight, lambda_v=lambda_v)
+                               parameterization=parameterization, alignment=alignment,
+                               dtw_tail=dtw_tail, tail_weight=tail_weight, lambda_v=lambda_v)
     else:
         z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
@@ -188,8 +188,8 @@ def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
         dtw_tail       = _DTW_TAIL_MAP.get(alignment, "l2")
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                                path_tensor, sigma_max=sigma_max,
-                               parameterization=parameterization, dtw_tail=dtw_tail,
-                               tail_weight=tail_weight, per_sample=True)
+                               parameterization=parameterization, alignment=alignment,
+                               dtw_tail=dtw_tail, tail_weight=tail_weight, per_sample=True)[0]
     else:
         z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
@@ -198,7 +198,7 @@ def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
         return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                            sigma_max=sigma_max, parameterization=parameterization,
-                           tail_weight=tail_weight, per_sample=True)
+                           tail_weight=tail_weight, per_sample=True)[0]
 
 
 def train_epoch(
