@@ -148,6 +148,10 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
 
 _DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english", "dtw_fixed": "l2"}
 
+# Alignments that go through the full alpha-timeline path in bridge_loss_dtw and therefore
+# support the auxiliary DTW-velocity loss (lambda_v). dtw_fixed dispatches early and bypasses it.
+_ALIGNMENTS_WITH_LAMBDA_V = {"dtw", "dtw_l2pad", "dtw_engpad"}
+
 
 def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
                   tail_weight=0.3, lambda_v=0.0):
@@ -378,7 +382,7 @@ def val_epoch(
                     model, batch, device, sigma_max, alignment, parameterization, tail_weight)
             for loss_val, sid in zip(per_sample.tolist(), slot_ids):
                 slot_losses[sid].append(loss_val)
-            pbar.set_postfix({"slots": len(slot_losses), "cur_min": f"{per_sample.min().item():.4f}"})
+            pbar.set_postfix({"cur_min": f"{per_sample.min().item():.4f}"})
 
     slot_min  = [min(v) for v in slot_losses.values()]
     val_loss  = sum(slot_min) / max(len(slot_min), 1)
@@ -539,10 +543,16 @@ def train(
     }
     save_config(out_dir / "config.json", **config)
 
-    if lambda_v > 0.0 and not alignment.startswith("dtw"):
-        raise ValueError("lambda_v > 0 requires --alignment dtw (velocity loss is DTW-only)")
+    if lambda_v > 0.0 and alignment not in _ALIGNMENTS_WITH_LAMBDA_V:
+        raise ValueError(
+            f"lambda_v > 0 requires a standard DTW alpha-timeline alignment "
+            f"({', '.join(sorted(_ALIGNMENTS_WITH_LAMBDA_V))}), got '{alignment}'. "
+            f"dtw_fixed dispatches before the velocity-loss path."
+        )
     if parameterization == "cfm_prewarp" and not alignment.startswith("dtw"):
-        raise ValueError("--parameterization cfm_prewarp requires --alignment dtw")
+        raise ValueError(
+            f"--parameterization cfm_prewarp requires a DTW alignment, got '{alignment}'"
+        )
 
     # Capture a sample batch for sanity checks (cosine similarity of denoised latents)
     # Use generic indexing — batch is 4-tuple (position) or 5-tuple (dtw)
@@ -554,10 +564,10 @@ def train(
     # DTW paths for cfm_prewarp: needed to compute z_nat_warped diagnostic
     path_sample = sample_batch[4][:32].to(device, non_blocking=True) if alignment.startswith("dtw") else None
 
-    # For cfm_prewarp: precompute z_nat_warped (DTW-aligned native frames on L2 timeline)
-    # used as the primary reference for cosine sim (not position-aligned z_nat).
+    # For alignments that fix the DTW mapping on the L2 timeline (cfm_prewarp, dtw_fixed):
+    # precompute z_nat_warped — the actual training target — as the primary cosine-sim reference.
     z_nat_warped_sample = None
-    if parameterization == "cfm_prewarp" and path_sample is not None:
+    if (alignment == "dtw_fixed" or parameterization == "cfm_prewarp") and path_sample is not None:
         with torch.no_grad():
             B_s   = z_nat_sample.shape[0]
             max_P = path_sample.shape[1]
@@ -583,7 +593,7 @@ def train(
     # Other parameterizations: mask to T_nat, cos vs z_nat.
     baseline_sim = None
     if z_acc_sample is not None:
-        if parameterization == "cfm_prewarp":
+        if alignment == "dtw_fixed" or parameterization == "cfm_prewarp":
             mask = (torch.arange(z_acc_sample.shape[1], device=device).unsqueeze(0)
                     < l2_speech_end_sample.to(device).unsqueeze(1))
             sim_pos = (F.cosine_similarity(z_acc_sample, z_nat_sample, dim=-1) * mask).sum(1) / mask.sum(1).float()
@@ -643,18 +653,20 @@ def train(
             with torch.no_grad():
                 z_hats = []
                 for b in range(z_acc_sample.shape[0]):
+                    t_l2 = int(l2_speech_end_sample[b].item())
+                    # dtw_fixed: inference must use T_nat=T_l2 to suppress N(t) morphing
+                    t_nat = t_l2 if alignment == "dtw_fixed" else int(nat_speech_end_sample[b].item())
                     z_hats.append(bridge_inference(
                         model, z_acc_sample[b:b+1],
-                        T_l2=int(l2_speech_end_sample[b].item()),
-                        T_nat=int(nat_speech_end_sample[b].item()),
+                        T_l2=t_l2, T_nat=t_nat,
                         n_steps=20, sigma_max=sigma_max,
                         parameterization=parameterization,
                     ))
                 z_hat = torch.cat(z_hats, dim=0)
                 L = z_hat.shape[1]
 
-                # cfm_prewarp: output lives on L2 timeline — mask and reference differ
-                if parameterization == "cfm_prewarp":
+                # Fixed-timeline modes: output lives on L2 timeline — mask and reference differ
+                if alignment == "dtw_fixed" or parameterization == "cfm_prewarp":
                     sp_mask = (torch.arange(L, device=device).unsqueeze(0)
                                < l2_speech_end_sample.to(device).unsqueeze(1))  # [B, L]
                     # Primary: cos(z_hat, z_nat_warped) — the actual training target
@@ -751,8 +763,14 @@ if __name__ == "__main__":
         "--alignment",
         type=str,
         default="position",
-        choices=["position", "position_fixed", "dtw", "dtw_l2pad", "dtw_engpad"],
-        help="Forward process alignment: position (full interp), position_fixed (fixed L2 tail), dtw (L2 tail), dtw_l2pad (L2 silence tail), dtw_engpad (English silence tail)",
+        choices=["position", "position_fixed", "dtw", "dtw_l2pad", "dtw_engpad", "dtw_fixed"],
+        help=(
+            "Forward process alignment. "
+            "position: full 1500-frame blend. "
+            "position_fixed: blend up to max(T_l2,T_nat), L2 tail. "
+            "dtw / dtw_l2pad / dtw_engpad: DTW alpha-timeline with N(t) morphing, L2/English tail. "
+            "dtw_fixed: fixed DTW mapping on L2 timeline, no N(t) morphing."
+        ),
     )
     parser.add_argument(
         "--dtw_cache",
@@ -767,7 +785,8 @@ if __name__ == "__main__":
     parser.add_argument("--sigma_max", type=float, default=2.0, help="Bridge noise scale — set to per-element std of (z_acc - z_nat)")
     parser.add_argument("--cond_acc", action="store_true", default=False, help="Condition on z_acc (I²SB cond_acc): concatenate z_acc to z_t before proj_in")
     parser.add_argument("--parameterization", type=str, default="eps", choices=["eps", "x0", "cfm", "cfm_prewarp"],
-                        help="Model parameterization: eps (epsilon-prediction), x0 (direct z_nat prediction), "
+                        help="Model parameterization: eps (I2SB-style: target=(z_t-z_nat)/(sigma_max*sqrt(t)), "
+                             "no 1/(1-t) in recovery), x0 (direct z_nat prediction), "
                              "cfm (OT flow matching: DTW morphing timeline), "
                              "cfm_prewarp (OT flow matching: fixed L2 timeline, DTW-warped native target)")
     parser.add_argument("--d_model", type=int, default=256, help="Transformer hidden dim")

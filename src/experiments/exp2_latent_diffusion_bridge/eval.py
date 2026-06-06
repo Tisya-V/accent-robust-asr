@@ -145,26 +145,31 @@ def bridge_inference_single(
     sigma_max: float = 2.0,
     device: torch.device = torch.device("cpu"),
     parameterization: str = "eps",
+    alignment: str = "dtw",
     predictor: Optional[torch.nn.Module] = None,
     tnat_buffer: int = 0,
 ) -> torch.Tensor:
-    """Bridge inference for a single [1500, 768] latent (position or DTW alignment).
+    """Bridge inference for a single [1500, 768] latent.
 
-    Predicts T_nat via predictor if provided; falls back to T_l2 if not.
+    For dtw_fixed: T_nat is fixed to T_l2 — the bridge runs entirely in L2 frame space
+    with no N(t) morphing, so T_nat prediction is meaningless and skipped.
+    For all other alignments: T_nat is predicted via `predictor` if provided, else T_l2.
     """
     from .diffusion import bridge_inference
     from .train_tnat_predictor import T_NORM
 
     z_acc_dev = z_acc.to(device=device, dtype=torch.float32)
 
-    if predictor is not None:
+    if alignment == "dtw_fixed":
+        T_nat = T_l2
+    elif predictor is not None:
         with torch.no_grad():
             pool   = z_acc_dev[:T_l2].mean(dim=0, keepdim=True)
             t_l2_n = torch.tensor([[T_l2 / T_NORM]], device=device)
             T_nat  = int(round(predictor(pool, t_l2_n.squeeze(-1)).item() * T_NORM))
         T_nat = max(1, min(T_nat + tnat_buffer, 1500))
     else:
-        T_nat = T_l2  # fallback: assume same length as L2
+        T_nat = T_l2
 
     z_acc_bf16 = z_acc_dev.to(torch.bfloat16).unsqueeze(0)  # [1, 1500, 768]
     with torch.no_grad():
@@ -184,6 +189,7 @@ def transcribe_with_bridge(
     decoder_type: str = "whisper",
     n_steps: int = 20,
     sigma_max: float = 0.5,
+    alignment: str = "dtw",
     predictor: Optional[torch.nn.Module] = None,
     tnat_buffer: int = 0,
 ) -> list[str]:
@@ -230,7 +236,7 @@ def transcribe_with_bridge(
             bridge, z_acc, T_l2=speech_end,
             n_steps=n_steps, sigma_max=sigma_max,
             device=device, parameterization=parameterization,
-            predictor=predictor, tnat_buffer=tnat_buffer,
+            alignment=alignment, predictor=predictor, tnat_buffer=tnat_buffer,
         )
         z_nat_hats.append(z_hat)  # [1500, 768] float32 on CPU
 
@@ -242,10 +248,14 @@ def transcribe_with_bridge(
     for batch_start in tqdm(range(0, len(valid_idx), BATCH_SIZE),
                             desc="  whisper decode", unit="batch"):
         batch_idx  = valid_idx[batch_start : batch_start + BATCH_SIZE]
-        batch_tens = torch.stack([z_nat_hats[i] for i in batch_idx]).to(device)  # [B, 1500, 768]
-        enc_out    = BaseModelOutput(last_hidden_state=batch_tens)
+        batch_tens  = torch.stack([z_nat_hats[i] for i in batch_idx]).to(device)  # [B, 1500, 768]
+        enc_out     = BaseModelOutput(last_hidden_state=batch_tens)
+        # Whisper's _maybe_reduce_batch needs input_features to resize the batch when shorter
+        # sequences finish before longer ones. Provide a dummy — encoder_outputs drives the forward pass.
+        dummy_feats = torch.zeros(len(batch_idx), 80, 3000, device=device, dtype=batch_tens.dtype)
         with torch.no_grad():
             pred_ids = decoder_model.generate(
+                input_features=dummy_feats,
                 encoder_outputs=enc_out,
                 language="en",
                 task="transcribe",
@@ -328,12 +338,14 @@ def evaluate_bridge(
         predictor = load_tnat_predictor(predictor_ckpt, device)
         print("[Eval] N(t) mask inference enabled")
 
-    # Read sigma_max from config if not supplied
+    # Read sigma_max and alignment from config if not supplied
+    config_path = bridge_ckpt.parent / "config.json"
+    cfg = _json.loads(config_path.read_text()) if config_path.exists() else {}
     if sigma_max is None:
-        config_path = bridge_ckpt.parent / "config.json"
-        cfg = _json.loads(config_path.read_text()) if config_path.exists() else {}
         sigma_max = cfg.get("sigma_max", 0.5)
         print(f"[Eval] sigma_max={sigma_max} (from config.json)")
+    alignment = cfg.get("alignment", "dtw")
+    print(f"[Eval] alignment={alignment} (from config.json)")
 
     # Load decoder
     print(f"[Eval] Loading {decoder} decoder...")
@@ -380,6 +392,7 @@ def evaluate_bridge(
         decoder_type=decoder,
         n_steps=n_steps,
         sigma_max=sigma_max,
+        alignment=alignment,
         predictor=predictor,
         tnat_buffer=tnat_buffer,
     )

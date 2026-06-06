@@ -8,25 +8,34 @@ Forward process:
   σ_bridge(t) = sigma_max·√(t(1-t))            peaks at t=0.5, zero at endpoints
 
 Three parameterizations (PARAM_REGISTRY):
-  eps  — predicts ε; target = (z_t - z_t_clean) / σ_bridge  [unit variance for all t]
-         recovery: z_nat_hat = (z_t - t·z_acc - σ_bridge·ε_pred) / (1-t)
+  eps  — I2SB-style: target = (z_t - z_nat) / (σ_max·√t)
+         = √t·(z_acc-z_nat)/σ_max + √(1-t)·ε  [bounded at both endpoints]
+         recovery: z_nat_hat = z_t - σ_max·√t·net_out  (no 1/(1-t))
   x0   — predicts z_nat_canon directly
          recovery: z_nat_hat = model output
   cfm  — predicts velocity v = dz_t/dt
          inference: Euler step z_{t-dt} = z_t - v·dt (no x0-blend)
 
-Two alignment modes (separate training functions):
-  position — frame-by-frame blend; bridge_loss()
-  dtw      — DTW alpha-timeline blend; bridge_loss_dtw()
+Alignment modes:
+  position  — frame-by-frame blend; bridge_loss()
+  dtw       — DTW alpha-timeline blend with N(t) morphing; bridge_loss_dtw()
+  dtw_fixed — fixed DTW mapping on L2 timeline; no N(t) morphing; bridge_loss_dtw()
+              Each L2 frame k maps to nat_idx[k] via DTW, bridge runs in T_l2 frame space.
+              Dispatched via _DTW_DISPATCH in bridge_loss_dtw().
 
-Special case:
-  cfm_prewarp — DTW-only; freezes alignment at t=1, straight-line blend on L2 timeline.
-                Handled by _bridge_loss_dtw_cfm_prewarp(), early-returned from bridge_loss_dtw().
+Special case (also via _DTW_DISPATCH):
+  cfm_prewarp — DTW-only; freezes alignment at t=1, straight-line blend on L2 timeline,
+                CFM velocity parameterization. Dispatched by parameterization key.
 
-Inference ODE step (shared, parameterization-independent):
+Inference ODE step (shared across eps/x0, parameterization-independent):
   z_{t'} = (1 - t'/t)·z_nat_hat + (t'/t)·z_t
 
-sigma_max calibration: per-element std of (z_acc - z_nat). For Whisper encoder latents ≈ 2.0.
+For dtw_fixed inference: pass T_nat=T_l2 to bridge_inference — this collapses N(t) to a
+constant so no frame-count morphing occurs during the reverse ODE.
+
+sigma_max calibration: per-element std of (z_acc - z_nat) over speech frames.
+Measured on hindi-only train split: 1.535 → use sigma_max=1.5.
+See claude-files/sigma_max_calibration.md for calibration code and rationale.
 """
 
 from __future__ import annotations
@@ -235,6 +244,7 @@ class BridgeParameterization(ABC):
         sigma_br: torch.Tensor,
         z_nat_canon: torch.Tensor,
         velocity: torch.Tensor | None = None,
+        sigma_fwd: torch.Tensor | None = None,
     ) -> torch.Tensor:
         ...
 
@@ -246,23 +256,39 @@ class BridgeParameterization(ABC):
         t_cur: torch.Tensor,
         model_out: torch.Tensor,
         sigma_br: torch.Tensor,
+        sigma_fwd: torch.Tensor | None = None,
     ) -> torch.Tensor:
         ...
 
 
 class EpsParam(BridgeParameterization):
-    """ε-prediction from conditional mean.
+    """I2SB-style ε-prediction — normalises by σ_fwd = σ_max·√t.
 
-    target = (z_t - z_t_clean) / σ_bridge  =  ε  (unit variance for all t)
-    recovery: z_nat_hat = (z_t - t·z_acc - σ_bridge·ε_pred) / (1-t)
+    σ_bridge(t) = σ_max·√(t(1-t)) collapses at both endpoints, which forces the
+    naive recovery to divide by (1-t) → unstable near t=1. Instead, following
+    I2SB (Liu et al., 2023) we normalise by the one-sided forward std σ_fwd = σ_max·√t,
+    which is monotone and never zero for t > 0.
+
+    Forward algebra:
+      z_t - z_nat = t·(z_acc - z_nat) + σ_max·√(t(1-t))·ε
+
+    Divide by σ_fwd = σ_max·√t:
+      target = √t·(z_acc - z_nat)/σ_max  +  √(1-t)·ε
+             → ε                    as t→0  (bounded, unit variance)
+             → (z_acc - z_nat)/σ_max  as t→1  (bounded by data)
+
+    Recovery:
+      z_nat_hat = z_t - σ_max·√t · net_out
+    — exact inversion, no division by (1-t).
     """
 
-    def compute_target(self, z_t, z_t_clean, sigma_br, z_nat_canon=None, velocity=None):
-        return (z_t - z_t_clean) / (sigma_br + 1e-8)
+    def compute_target(self, z_t, z_t_clean, sigma_br, z_nat_canon, velocity=None, sigma_fwd=None):
+        denom = sigma_fwd if sigma_fwd is not None else sigma_br
+        return (z_t - z_nat_canon) / (denom + 1e-8)
 
-    def recover_x0(self, z_t, z_acc, t_cur, model_out, sigma_br):
-        one_minus_t = (1.0 - t_cur).clamp(min=1e-4)
-        return (z_t - t_cur * z_acc - sigma_br * model_out) / one_minus_t
+    def recover_x0(self, z_t, z_acc, t_cur, model_out, sigma_br, sigma_fwd=None):
+        denom = sigma_fwd if sigma_fwd is not None else sigma_br
+        return z_t - denom * model_out
 
 
 class X0Param(BridgeParameterization):
@@ -272,10 +298,10 @@ class X0Param(BridgeParameterization):
     recovery = model output (already z_nat_hat)
     """
 
-    def compute_target(self, z_t, z_t_clean, sigma_br, z_nat_canon, velocity=None):
+    def compute_target(self, z_t, z_t_clean, sigma_br, z_nat_canon, velocity=None, sigma_fwd=None):
         return z_nat_canon
 
-    def recover_x0(self, z_t, z_acc, t_cur, model_out, sigma_br):
+    def recover_x0(self, z_t, z_acc, t_cur, model_out, sigma_br, sigma_fwd=None):
         return model_out
 
 
@@ -287,12 +313,12 @@ class CFMParam(BridgeParameterization):
       recover_x0 unused)
     """
 
-    def compute_target(self, z_t, z_t_clean, sigma_br, z_nat_canon=None, velocity=None):
+    def compute_target(self, z_t, z_t_clean, sigma_br, z_nat_canon=None, velocity=None, sigma_fwd=None):
         if velocity is None:
             raise ValueError("CFMParam.compute_target requires velocity kwarg")
         return velocity
 
-    def recover_x0(self, z_t, z_acc, t_cur, model_out, sigma_br):
+    def recover_x0(self, z_t, z_acc, t_cur, model_out, sigma_br, sigma_fwd=None):
         raise NotImplementedError("CFM uses Euler steps, not x0 recovery")
 
 
@@ -422,6 +448,7 @@ def _bridge_loss_dtw_fixed(
     z_acc_l2  = z_acc[:, :max_l2, :]
     z_t_clean = (1 - t_view) * z_nat_warped + t_view * z_acc_l2
     sigma_br  = sigma_bridge(t_batch, sigma_max).view(B, 1, 1)
+    sigma_fwd = (sigma_max * t_batch.sqrt()).view(B, 1, 1)
     sm        = pos[:, :max_l2] < T_l2.long().unsqueeze(1)                     # [B, max_l2]
     eps       = torch.randn_like(z_t_clean)
     z_t_l2    = z_t_clean + sigma_br * eps * sm.unsqueeze(-1)
@@ -432,7 +459,7 @@ def _bridge_loss_dtw_fixed(
 
     pred   = model(z_t_full, t_batch, z_acc)[:, :max_l2, :]                    # [B, max_l2, D]
     target = PARAM_REGISTRY[parameterization].compute_target(
-        z_t_l2, z_t_clean, sigma_br, z_nat_warped,
+        z_t_l2, z_t_clean, sigma_br, z_nat_warped, sigma_fwd=sigma_fwd,
     )
 
     sm_f    = sm.float().unsqueeze(-1)
@@ -491,8 +518,9 @@ def bridge_loss(
     speech_mask = pos < N_batch.unsqueeze(1)
 
     z_t_clean  = _build_z_t_clean_position(z_nat, z_acc, t_batch, speech_mask, pos, N_batch, l2_speech_end, max_len)
-    sigma_br = sigma_bridge(t_batch, sigma_max).view(B, 1, 1)
-    z_t, _   = _apply_bridge_noise(z_t_clean, sigma_br, speech_mask)
+    sigma_br  = sigma_bridge(t_batch, sigma_max).view(B, 1, 1)
+    sigma_fwd = (sigma_max * t_batch.sqrt()).view(B, 1, 1)
+    z_t, _    = _apply_bridge_noise(z_t_clean, sigma_br, speech_mask)
 
     z_nat_canon, tail_mask = _build_endpoint(z_nat, z_acc, nat_speech_end, l2_speech_end, max_len)
 
@@ -504,7 +532,7 @@ def bridge_loss(
 
     param  = PARAM_REGISTRY[parameterization]
     pred   = model(z_t, t_batch, z_acc)
-    target = param.compute_target(z_t, z_t_clean, sigma_br, z_nat_canon, velocity=velocity)
+    target = param.compute_target(z_t, z_t_clean, sigma_br, z_nat_canon, velocity=velocity, sigma_fwd=sigma_fwd)
 
     return _split_loss(pred, target, speech_mask, tail_mask, tail_weight, per_sample)
 
@@ -563,8 +591,9 @@ def bridge_loss_dtw(
     z_t_clean, speech_acc, speech_nat, speech_pos, speech_mask = _build_z_t_clean_dtw(
         z_nat, z_acc, t_batch, path_tensor, T_l2, T_nat, N_batch, max_len, dtw_tail,
     )
-    sigma_br = sigma_bridge(t_batch, sigma_max).view(B, 1, 1)
-    z_t, _   = _apply_bridge_noise(z_t_clean, sigma_br, speech_mask)
+    sigma_br  = sigma_bridge(t_batch, sigma_max).view(B, 1, 1)
+    sigma_fwd = (sigma_max * t_batch.sqrt()).view(B, 1, 1)
+    z_t, _    = _apply_bridge_noise(z_t_clean, sigma_br, speech_mask)
 
     z_nat_canon, tail_mask = _build_endpoint(z_nat, z_acc, nat_speech_ends, l2_speech_ends, max_len)
 
@@ -578,7 +607,7 @@ def bridge_loss_dtw(
 
     param  = PARAM_REGISTRY[parameterization]
     pred   = model(z_t, t_batch, z_acc)
-    target = param.compute_target(z_t, z_t_clean, sigma_br, z_nat_canon, velocity=velocity)
+    target = param.compute_target(z_t, z_t_clean, sigma_br, z_nat_canon, velocity=velocity, sigma_fwd=sigma_fwd)
 
     result = _split_loss(pred, target, speech_mask, tail_mask, tail_weight, per_sample)
 
@@ -696,8 +725,10 @@ def bridge_inference(
             # x0-recovery path (eps and x0)
             model_out      = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop)
             sigma_br_cur   = sigma_bridge(t_cur, sigma_max)
+            sigma_fwd_cur  = sigma_max * (t_cur ** 0.5)
             z_nat_hat_crop = param.recover_x0(
                 z_t[:, :inf_len, :], z_acc_crop, t_cur, model_out, sigma_br_cur,
+                sigma_fwd=sigma_fwd_cur,
             )
 
             z_nat_hat = z_t.clone()

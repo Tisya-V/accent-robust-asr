@@ -1,12 +1,12 @@
 {
-  "alignment": "dtw",
-  "n_epochs": 15,
+  "alignment": "dtw_fixed",
+  "n_epochs": 25,
   "batch_size": 64,
   "lr": 0.0001,
   "weight_decay": 0.0001,
-  "sigma_max": 1.5,
+  "sigma_max": 1.0,
   "cond_acc": true,
-  "parameterization": "eps",
+  "parameterization": "x0",
   "num_workers": 6,
   "model": "BridgeTransformer",
   "d_model": 768,
@@ -15,7 +15,7 @@
   "dim_feedforward": 3072,
   "patience": 5,
   "seed": 42,
-  "notes": "v2 data, eps param with sigma=1.5, stochastic inference",
+  "notes": "v2 data, hindi-only sanity check ",
   "tail_weight": 0.0,
   "lambda_v": 0.0
 }

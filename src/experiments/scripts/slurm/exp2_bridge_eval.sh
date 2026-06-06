@@ -45,10 +45,11 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
-MODELS=( "bridge_dtw_eps_sde_sig1.5" )
+MODELS=( "bridge_dtw_eps" )
 
 for MODEL in "${MODELS[@]}"; do
     python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+        --mapping_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
         --bridge_ckpt    models/"$MODEL"/checkpoint_best.pt \
         --predictor_ckpt models/tnat_predictor/model_best.pt \
         --output_dir     results/bridge_eval \
