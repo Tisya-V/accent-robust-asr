@@ -6,7 +6,7 @@
   "weight_decay": 0.0001,
   "sigma_max": 0.5,
   "cond_acc": true,
-  "parameterization": "eps",
+  "parameterization": "x0",
   "num_workers": 6,
   "model": "BridgeTransformer",
   "d_model": 768,

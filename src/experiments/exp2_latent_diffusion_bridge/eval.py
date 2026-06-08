@@ -26,7 +26,7 @@ import jiwer
 from tqdm import tqdm
 import soundfile
 
-from src.config import TEST_SPEAKERS, SPEAKER_L1
+from src.config import TEST_SPEAKERS, SPEAKER_L1, RANDOM_SEED
 from src.utils.load_l2arctic import load_test_utterances
 from src.utils.model_loader import load_baseline_whisper
 from src.utils.bridge_utils import get_split_data_dir
@@ -209,9 +209,11 @@ def transcribe_with_bridge(
     decoder_type: str = "whisper",
     n_steps: int = 20,
     sigma_max: float = 0.5,
+    ode_sampling: bool = False,
     alignment: str = "dtw",
     predictor: Optional[torch.nn.Module] = None,
     tnat_buffer: int = 0,
+    anti_rep_safety: bool = False,
 ) -> list[str]:
     """
     Transcribe utterances using bridge-corrected encoder states.
@@ -293,7 +295,8 @@ def transcribe_with_bridge(
         with torch.no_grad():
             z_hat_batch = bridge_inference(
                 bridge, z_acc_batch, T_l2=T_l2_batch, T_nat=T_nat_batch,
-                n_steps=n_steps, sigma_max=sigma_max, parameterization=parameterization,
+                n_steps=n_steps, sigma_max=sigma_max, ode_sampling=ode_sampling,
+                parameterization=parameterization,
                 key_padding_mask=kpm,
             )
 
@@ -314,14 +317,21 @@ def transcribe_with_bridge(
         # Whisper's _maybe_reduce_batch needs input_features to resize the batch when shorter
         # sequences finish before longer ones. Provide a dummy — encoder_outputs drives the forward pass.
         dummy_feats = torch.zeros(len(batch_idx), 80, 3000, device=device, dtype=batch_tens.dtype)
+        gen_kwargs = dict(
+            input_features=dummy_feats,
+            encoder_outputs=enc_out,
+            language="en",
+            task="transcribe",
+            temperature=0.0,
+        )
+        if anti_rep_safety:
+            # Sanity check only — baseline eval runs greedy with none of these. If
+            # turning them on closes most of the WER gap, that's evidence the damage
+            # is decode-time degeneration on borderline-off-manifold input rather than
+            # a deeper geometric problem (which these guardrails couldn't paper over).
+            gen_kwargs.update(no_repeat_ngram_size=3, repetition_penalty=1.3)
         with torch.no_grad():
-            pred_ids = decoder_model.generate(
-                input_features=dummy_feats,
-                encoder_outputs=enc_out,
-                language="en",
-                task="transcribe",
-                temperature=0.0,
-            )
+            pred_ids = decoder_model.generate(**gen_kwargs)
         batch_preds = processor.batch_decode(pred_ids, skip_special_tokens=True)
         for i, pred in zip(batch_idx, batch_preds):
             predictions[i] = pred
@@ -365,11 +375,14 @@ def evaluate_bridge(
     output_dir: str = "results/bridge_eval",
     n_steps: int = 20,
     sigma_max: float | None = None,
+    ode_sampling: bool = False,
     mapping_path: str = "src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json",
     max_utts_per_speaker: int | None = None,
     output_file: str = "bridge_predictions.csv",
     predictor_ckpt: str | Path | None = None,
     tnat_buffer: int = 0,
+    anti_rep_safety: bool = False,
+    seed: int = RANDOM_SEED,
 ) -> None:
     """
     Evaluate bridge model on test speakers.
@@ -379,15 +392,34 @@ def evaluate_bridge(
         decoder: "whisper" or "whisfusion"
         output_dir: Where to save results CSV
         n_steps: Number of ODE steps for bridge inference
-        sigma_max: Noise schedule parameter — if None, read from config.json next to checkpoint
+        sigma_max: Noise schedule parameter — if None, read from config.json next to checkpoint.
+            Always kept at the trained value (drives recover_x0); do NOT zero this to get
+            deterministic sampling — for eps-parameterized models that silently discards
+            the network's output (see ode_sampling).
+        ode_sampling: If True, suppress only the injected stochastic term in bridge_inference's
+            reverse step (sigma_max-driven recovery untouched) — gives the deterministic
+            probability-flow ODE for these trained weights. An inference-time ablation on a
+            stochastically-trained model (valid per Song et al.: same marginals as the SDE for
+            the same learned drift) — NOT a reproduction of I2SB's `ot_ode` (a training-time
+            choice yielding a differently-trained network).
         mapping_path: Path to mapping_test.json (encoder states located via TEST_DATA_DIR env var)
         max_utts_per_speaker: If set, stratified subsample to this many utterances per speaker
+        anti_rep_safety: If True, decode with no_repeat_ngram_size=3 + repetition_penalty=1.3.
+            Sanity-check switch only — baseline eval runs greedy with neither. Use to gauge how
+            much of the loss-side WER is decode-time repetition collapse vs. something deeper.
+        seed: Seeds torch's RNG (CPU + CUDA) before inference. bridge_inference is an SDE —
+            it injects fresh torch.randn noise at every reverse step when sigma_max > 0 — so
+            without seeding, repeat runs of the same checkpoint produce different predictions.
     """
     import json as _json
 
     bridge_ckpt = Path(bridge_ckpt)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Eval] Device: {device}")
+
+    # bridge_inference is an SDE (injects fresh noise each step) -- seed before calling it.
+    torch.manual_seed(seed)
+    print(f"[Eval] torch.manual_seed({seed})")
 
     # Load bridge
     print(f"[Eval] Loading bridge from {bridge_ckpt}")
@@ -453,9 +485,11 @@ def evaluate_bridge(
         decoder_type=decoder,
         n_steps=n_steps,
         sigma_max=sigma_max,
+        ode_sampling=ode_sampling,
         alignment=alignment,
         predictor=predictor,
         tnat_buffer=tnat_buffer,
+        anti_rep_safety=anti_rep_safety,
     )
 
     # Build results
@@ -506,10 +540,16 @@ def evaluate_bridge(
         "per": float(per_vals.mean()) if len(per_vals) else None,
         "n_test_utts": len(test_utts),
         "max_utts_per_speaker": max_utts_per_speaker,
+        "sigma_max": sigma_max,
+        "ode_sampling": ode_sampling,
+        "seed": seed,
         "per_l1": per_l1,
         "predictions_csv": str(out_path),
     }
-    summary_path = bridge_ckpt.parent / "eval_summary.json"
+    # Name the summary after output_file rather than a fixed "eval_summary.json" --
+    # otherwise repeat runs with different settings (e.g. --sigma_max overrides,
+    # --anti_rep_safety) silently clobber each other's summaries in the model dir.
+    summary_path = bridge_ckpt.parent / f"{Path(output_file).stem}_summary.json"
     summary_path.write_text(_json.dumps(summary, indent=2))
     print(f"  Saved summary: {summary_path}")
 
@@ -547,7 +587,16 @@ if __name__ == "__main__":
         "--sigma_max",
         type=float,
         default=None,
-        help="Noise schedule parameter — defaults to value in config.json next to checkpoint",
+        help="Noise schedule parameter — defaults to value in config.json next to checkpoint. "
+             "Always keep at the trained value; use --ode_sampling for deterministic sampling, "
+             "do not zero this (silently discards the network's output for eps parameterization).",
+    )
+    parser.add_argument(
+        "--ode_sampling",
+        action="store_true",
+        help="Suppress only the injected stochastic term in bridge_inference's reverse step "
+             "(sigma_max-driven recovery untouched) -- deterministic probability-flow ODE "
+             "ablation for these trained weights, vs. the SDE sampling used in training/default eval",
     )
     parser.add_argument(
         "--mapping_path",
@@ -579,6 +628,19 @@ if __name__ == "__main__":
         default=0,
         help="Extra frames added to T_nat_hat before bridge inference to guard against truncation",
     )
+    parser.add_argument(
+        "--anti_rep_safety",
+        action="store_true",
+        help="Sanity check: decode with no_repeat_ngram_size=3 + repetition_penalty=1.3 "
+             "(baseline eval uses neither) to gauge how much loss-side WER is decode-time "
+             "repetition collapse vs. something deeper",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=RANDOM_SEED,
+        help="Seeds torch's RNG before bridge inference (an SDE) so runs are reproducible",
+    )
 
     args = parser.parse_args()
     evaluate_bridge(
@@ -587,9 +649,12 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         n_steps=args.n_steps,
         sigma_max=args.sigma_max,
+        ode_sampling=args.ode_sampling,
         mapping_path=args.mapping_path,
         max_utts_per_speaker=args.max_utts_per_speaker,
         output_file=args.output_file,
         predictor_ckpt=args.predictor_ckpt,
         tnat_buffer=args.tnat_buffer,
+        anti_rep_safety=args.anti_rep_safety,
+        seed=args.seed,
     )

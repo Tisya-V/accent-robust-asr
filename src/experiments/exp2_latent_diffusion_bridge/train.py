@@ -508,7 +508,22 @@ def train(
 
     # EMA shadow weights — standard diffusion practice (see I2SB). Smoothed weights
     # are what val_epoch/sanity-checks/eval.py ultimately judge and deploy.
+    #
+    # Model params are bfloat16 (see .to(dtype=torch.bfloat16) above) — but the EMA
+    # shadow must accumulate in fp32. torch_ema.update() does
+    # `s_param.sub_((s_param - param) * (1 - decay))`; in bf16 (~8 mantissa bits),
+    # the increment `(1-decay)*(s_param-param)` routinely falls below s_param's
+    # rounding unit and gets silently absorbed (rounds back to s_param, no-op) —
+    # different params freeze at different times depending on how fast they move,
+    # producing an internally-inconsistent shadow that gets WORSE over training as
+    # the live (properly fp32-accumulated optimizer state) model pulls away from the
+    # frozen parts. Upcasting shadow_params to fp32 fixes this: _params_refs still
+    # tracks the live bf16 model.parameters(), and `s_param - param` then
+    # type-promotes to fp32, so the whole accumulation runs at full precision. The
+    # eventual copy_to()/average_parameters() downcast back to bf16 for
+    # validation/inference is the same downcast that happens everywhere else here.
     ema = ExponentialMovingAverage(model.parameters(), decay=ema_decay)
+    ema.shadow_params = [p.clone().float() for p in ema.shadow_params]
     ema.to(device)
 
     # Resume from checkpoint if it exists
@@ -519,6 +534,11 @@ def train(
         start_epoch, best_val_loss = load_checkpoint(
             ckpt_latest, model, optimizer, scheduler, ema, device
         )
+        # torch_ema.load_state_dict() casts the loaded shadow_params to match the
+        # live params' dtype/device (`s.to(device=p.device, dtype=p.dtype)`, where
+        # p is the live bf16 model param) -- silently undoing the fp32 upcast above
+        # on every resume. Re-apply it so the fix survives checkpoint loads too.
+        ema.shadow_params = [p.float() for p in ema.shadow_params]
         start_epoch += 1  # Start from next epoch
 
     print(torch.cuda.memory_allocated() / 1e9, "GB allocated")

@@ -1,0 +1,38 @@
+{
+  "wer": 6.527958481510394,
+  "mer": 0.9622629849512225,
+  "per": 5.106681492276383,
+  "n_test_utts": 7796,
+  "max_utts_per_speaker": null,
+  "per_l1": {
+    "Arabic": {
+      "wer": 6.753752858136992,
+      "n_utts": 1132
+    },
+    "Chinese": {
+      "wer": 6.4820502592740326,
+      "n_utts": 1130
+    },
+    "English": {
+      "wer": 6.302924093731224,
+      "n_utts": 1132
+    },
+    "Hindi": {
+      "wer": 6.193397633489112,
+      "n_utts": 1132
+    },
+    "Korean": {
+      "wer": 6.8895412478853615,
+      "n_utts": 1131
+    },
+    "Spanish": {
+      "wer": 7.015105740181269,
+      "n_utts": 1007
+    },
+    "Vietnamese": {
+      "wer": 6.111751839331875,
+      "n_utts": 1132
+    }
+  },
+  "predictions_csv": "results/bridge_eval/bridge_position_eps_1.5.csv"
+}

@@ -658,6 +658,7 @@ def bridge_inference(
     T_nat: int | torch.Tensor,
     n_steps: int = 20,
     sigma_max: float = 2.0,
+    ode_sampling: bool = False,
     parameterization: str = "eps",
     key_padding_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -674,7 +675,20 @@ def bridge_inference(
         T_l2:      accented speech end frame — scalar (broadcasts to all B) or [B] tensor
         T_nat:     predicted native speech end frame — scalar (broadcasts) or [B] tensor
         n_steps:   ODE steps
-        sigma_max: must match training value
+        sigma_max: must match training value — drives recover_x0 (sigma_br/sigma_fwd),
+            which inverts the training-time target definition. Always keep this at the
+            trained value, regardless of `ode_sampling`: zeroing it does not "remove
+            injected noise", it makes EpsParam.recover_x0 return `z_t - 0*model_out`,
+            silently discarding the network's prediction and freezing the trajectory
+            at z_acc (a no-op bridge), since z_t starts at z_acc with no noise added.
+        ode_sampling: if True, suppress only the injected stochastic term in the
+            reverse step (the `noise_std * randn` Langevin/correction term below),
+            giving the deterministic probability-flow ODE for these *trained* weights
+            — sigma_max-driven recovery is untouched. This is an inference-time
+            ablation on a stochastically-trained model (valid per Song et al.: the
+            probability-flow ODE shares marginals with the SDE for the same learned
+            drift) — NOT I2SB's `ot_ode`, which is a training-time choice that yields
+            a differently-trained network (their q_sample is gated by the same flag).
         key_padding_mask: optional [B, 1500] bool, True = real frame / False = padding.
             Required when batching utterances with different `inf_len` (see below) —
             proven equivalent to running each sample at its own length alone (the
@@ -768,8 +782,11 @@ def bridge_inference(
 
             # ODE step: linear interpolation toward z_nat_hat
             z_t = (1 - t_next / t_cur) * z_nat_hat + (t_next / t_cur) * z_t
-            if sigma_max > 0:
+            if not ode_sampling:
                 # SDE posterior noise: σ(t',t) = sigma_max·√(t'·(t-t')/t)
+                # `ode_sampling` suppresses only this injected term -- sigma_max itself
+                # stays at the trained value, still driving recover_x0 above (the
+                # deterministic probability-flow ODE for these trained weights).
                 noise_std = sigma_max * torch.sqrt((t_next * (t_cur - t_next) / t_cur).clamp(min=0.0))
                 z_t[:, :inf_len, :] += noise_std * torch.randn(B, inf_len, D, device=device, dtype=dtype)
             z_t = _fill_silence(z_t, _active_boundary(t_next.item()))

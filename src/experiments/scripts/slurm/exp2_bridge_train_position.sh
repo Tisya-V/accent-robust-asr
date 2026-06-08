@@ -44,7 +44,8 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --sigma_max    1.5 \
     --num_workers  6 \
     --patience     5 \
-    --notes        "v2 data, i2sb style target formulation and training, now with PEs"
+    --ema_decay      0.99 \
+    --notes        "v2 data, i2sb style target formulation and training, now with PEs, EMA and batch inference"
 
 echo "Training done at $(date)"
 

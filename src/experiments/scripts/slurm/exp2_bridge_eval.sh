@@ -53,9 +53,11 @@ for MODEL in "${MODELS[@]}"; do
         --bridge_ckpt    models/"$MODEL"/checkpoint_best.pt \
         --predictor_ckpt models/tnat_predictor/model_best.pt \
         --output_dir     results/bridge_eval \
-        --output_file    "$MODEL".csv \
+        --output_file    "$MODEL"_odesampling.csv \
         --n_steps        100 \
-        --tnat_buffer   35
+        --tnat_buffer   35 \
+        --ode_sampling   \
+        # --anti_rep_safety \
         # --max_utts_per_speaker 50 \
 done
 

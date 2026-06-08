@@ -15,7 +15,7 @@
   "dim_feedforward": 3072,
   "patience": 5,
   "seed": 42,
-  "notes": "v2 data, i2sb style target formulation and training, now with PEs",
+  "notes": "v2 data, i2sb style target formulation and training, now with PEs, EMA and batch inference",
   "lambda_v": 0.0,
-  "ema_decay": 0.999
+  "ema_decay": 0.99
 }
