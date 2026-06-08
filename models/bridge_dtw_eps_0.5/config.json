@@ -1,5 +1,5 @@
 {
-  "alignment": "dtw_fixed",
+  "alignment": "dtw",
   "n_epochs": 25,
   "batch_size": 64,
   "lr": 0.0001,
@@ -15,7 +15,7 @@
   "dim_feedforward": 3072,
   "patience": 5,
   "seed": 42,
-  "notes": "v2 data, i2sb style target formulation and training",
-  "tail_weight": 0.0,
-  "lambda_v": 0.0
+  "notes": "v2 data, i2sb style target formulation and training, now with PEs",
+  "lambda_v": 0.0,
+  "ema_decay": 0.999
 }

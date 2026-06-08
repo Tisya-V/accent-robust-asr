@@ -45,7 +45,7 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
-MODELS=( "bridge_dtw_eps" )
+MODELS=( "bridge_dtw_fixed_eps_0.5" )
 
 for MODEL in "${MODELS[@]}"; do
     python -m src.experiments.exp2_latent_diffusion_bridge.eval \
@@ -55,8 +55,8 @@ for MODEL in "${MODELS[@]}"; do
         --output_dir     results/bridge_eval \
         --output_file    "$MODEL".csv \
         --n_steps        100 \
-        --max_utts_per_speaker 50 \
         --tnat_buffer   35
+        # --max_utts_per_speaker 50 \
 done
 
 echo "✅ Bridge evaluation complete."

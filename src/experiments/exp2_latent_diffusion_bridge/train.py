@@ -22,6 +22,8 @@ from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+from torch_ema import ExponentialMovingAverage
+
 from .model import BridgeTransformer
 from .diffusion import bridge_loss, bridge_loss_dtw
 from .dataset import BridgeDataset
@@ -62,16 +64,18 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
+    ema: ExponentialMovingAverage,
     epoch: int,
     best_val_loss: float,
 ):
-    """Save checkpoint with model, optimizer, and scheduler state."""
+    """Save checkpoint with model, optimizer, scheduler, and EMA shadow state."""
     torch.save(
         {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
+            "ema_state_dict": ema.state_dict(),
             "best_val_loss": best_val_loss,
         },
         ckpt_path,
@@ -84,9 +88,17 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
+    ema: ExponentialMovingAverage,
     device: torch.device,
 ) -> Tuple[int, float]:
-    """Load checkpoint and return starting epoch + best val loss."""
+    """Load checkpoint and return starting epoch + best val loss.
+
+    `ema` is updated in place: if the checkpoint has an `ema_state_dict` (current
+    format), it's loaded; if not (a resume hitting a pre-EMA checkpoint), `ema` is
+    left as the freshly-constructed shadow the caller passed in — which, since it
+    was built from `model.parameters()` after `model.load_state_dict()` ran, is
+    already correctly seeded from the just-loaded weights.
+    """
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     state_dict = ckpt["model_state_dict"]
 
@@ -97,6 +109,11 @@ def load_checkpoint(
     model.load_state_dict(state_dict)
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+    if "ema_state_dict" in ckpt:
+        ema.load_state_dict(ckpt["ema_state_dict"])
+    else:
+        print("[Checkpoint] No ema_state_dict found (pre-EMA checkpoint) — "
+              "seeding fresh EMA shadow from loaded model weights")
     epoch = ckpt["epoch"]
     best_val_loss = ckpt["best_val_loss"]
     print(f"[Checkpoint] Resumed from epoch {epoch}, best_val_loss={best_val_loss:.6f}")
@@ -113,15 +130,12 @@ def save_config(config_path: Path, **kwargs):
 
 
 def save_history(history_path: Path, train_losses: list, val_losses: list,
-                 train_speech_losses: list = None, train_tail_losses: list = None,
-                 val_speech_losses: list = None, val_tail_losses: list = None,
+                 train_speech_losses: list = None, val_speech_losses: list = None,
                  cosine_sims: dict = None):
     """Save training history to JSON."""
     history = {"train_losses": train_losses, "val_losses": val_losses}
     if train_speech_losses: history["train_speech_losses"] = train_speech_losses
-    if train_tail_losses:   history["train_tail_losses"]   = train_tail_losses
     if val_speech_losses:   history["val_speech_losses"]   = val_speech_losses
-    if val_tail_losses:     history["val_tail_losses"]     = val_tail_losses
     if cosine_sims:         history["cosine_similarities"] = cosine_sims
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "w") as f:
@@ -146,16 +160,9 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
     plt.close()
 
 
-_DTW_TAIL_MAP = {"dtw": "l2", "dtw_l2pad": "l2", "dtw_engpad": "english", "dtw_fixed": "l2"}
-
-# Alignments that go through the full alpha-timeline path in bridge_loss_dtw and therefore
-# support the auxiliary DTW-velocity loss (lambda_v). dtw_fixed dispatches early and bypasses it.
-_ALIGNMENTS_WITH_LAMBDA_V = {"dtw", "dtw_l2pad", "dtw_engpad"}
-
-
 def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
-                  tail_weight=0.3, lambda_v=0.0):
-    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, tail_loss, vel_loss)."""
+                  lambda_v=0.0):
+    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, vel_loss)."""
     if alignment.startswith("dtw"):
         z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
@@ -163,11 +170,10 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
         path_tensor    = path_tensor.to(device, non_blocking=True)
-        dtw_tail       = _DTW_TAIL_MAP.get(alignment, "l2")
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                                path_tensor, sigma_max=sigma_max,
                                parameterization=parameterization, alignment=alignment,
-                               dtw_tail=dtw_tail, tail_weight=tail_weight, lambda_v=lambda_v)
+                               lambda_v=lambda_v)
     else:
         z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
@@ -175,12 +181,11 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
         return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
-                           sigma_max=sigma_max, parameterization=parameterization,
-                           tail_weight=tail_weight)
+                           sigma_max=sigma_max, parameterization=parameterization)
 
 
 def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
-                              parameterization="eps", tail_weight=0.3) -> torch.Tensor:
+                              parameterization="eps") -> torch.Tensor:
     """Return per-sample losses [B] for min-over-natives val computation."""
     if alignment.startswith("dtw"):
         z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids = batch
@@ -189,11 +194,10 @@ def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
         path_tensor    = path_tensor.to(device, non_blocking=True)
-        dtw_tail       = _DTW_TAIL_MAP.get(alignment, "l2")
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                                path_tensor, sigma_max=sigma_max,
                                parameterization=parameterization, alignment=alignment,
-                               dtw_tail=dtw_tail, tail_weight=tail_weight, per_sample=True)[0]
+                               per_sample=True)[0]
     else:
         z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
         z_acc          = z_acc.to(device, non_blocking=True)
@@ -202,23 +206,23 @@ def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
         return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                            sigma_max=sigma_max, parameterization=parameterization,
-                           tail_weight=tail_weight, per_sample=True)[0]
+                           per_sample=True)[0]
 
 
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
+    ema: ExponentialMovingAverage,
     device: torch.device,
     sigma_max: float = 0.5,
     alignment: str = "position",
     parameterization: str = "eps",
-    tail_weight: float = 0.3,
     lambda_v: float = 0.0,
-) -> tuple[float, float, float, float]:
-    """Train for one epoch. Returns (avg_total, avg_speech, avg_tail, avg_vel)."""
+) -> tuple[float, float, float]:
+    """Train for one epoch. Returns (avg_total, avg_speech, avg_vel)."""
     model.train()
-    total_loss = speech_loss_sum = tail_loss_sum = vel_loss_sum = 0.0
+    total_loss = speech_loss_sum = vel_loss_sum = 0.0
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
@@ -226,28 +230,26 @@ def train_epoch(
         optimizer.zero_grad()
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss, sp_loss, tl_loss, vel_loss = _compute_loss(
-                model, batch, device, sigma_max, alignment, parameterization, tail_weight, lambda_v)
+            loss, sp_loss, vel_loss = _compute_loss(
+                model, batch, device, sigma_max, alignment, parameterization, lambda_v)
 
         loss.backward()
         clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        ema.update()
 
         total_loss    += loss.item()
         speech_loss_sum += sp_loss
-        tail_loss_sum   += tl_loss
         vel_loss_sum    += vel_loss
         num_batches += 1
 
         postfix = {"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}"}
-        if tail_weight > 0:
-            postfix["tl"] = f"{tl_loss:.4f}"
         if lambda_v > 0:
             postfix["vl"] = f"{vel_loss:.4f}"
         pbar.set_postfix(postfix)
 
     pbar.close()
-    return total_loss / num_batches, speech_loss_sum / num_batches, tail_loss_sum / num_batches, vel_loss_sum / num_batches
+    return total_loss / num_batches, speech_loss_sum / num_batches, vel_loss_sum / num_batches
 
 
 def train_epoch_profile(
@@ -357,9 +359,8 @@ def val_epoch(
     sigma_max: float = 0.5,
     alignment: str = "position",
     parameterization: str = "eps",
-    tail_weight: float = 0.3,
     lambda_v: float = 0.0,  # unused in val; kept for call-site consistency
-) -> tuple[float, float, float]:
+) -> tuple[float, float]:
     """Validate with min-over-natives loss.
 
     For each L2 utterance slot (identified by l2_encoder_state_path), takes the
@@ -367,8 +368,8 @@ def val_epoch(
     measures 'can the model map to any valid native realization?' rather than
     penalising a correct CLB output when the val entry happens to be SLT.
 
-    Returns (avg_min_slot_loss, 0.0, 0.0). Speech/tail breakdown not available
-    per-sample; the 0.0 placeholders preserve the return type for save_history.
+    Returns (avg_min_slot_loss, 0.0). Speech breakdown not available per-sample;
+    the 0.0 placeholder preserves the return type for save_history.
     """
     model.eval()
     slot_losses: dict[str, list[float]] = defaultdict(list)
@@ -379,14 +380,14 @@ def val_epoch(
             slot_ids = batch[-1]  # list of str, last element from collate_fn / collate_fn_dtw
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 per_sample = _compute_loss_per_sample(
-                    model, batch, device, sigma_max, alignment, parameterization, tail_weight)
+                    model, batch, device, sigma_max, alignment, parameterization)
             for loss_val, sid in zip(per_sample.tolist(), slot_ids):
                 slot_losses[sid].append(loss_val)
             pbar.set_postfix({"cur_min": f"{per_sample.min().item():.4f}"})
 
     slot_min  = [min(v) for v in slot_losses.values()]
     val_loss  = sum(slot_min) / max(len(slot_min), 1)
-    return val_loss, 0.0, 0.0
+    return val_loss, 0.0
 
 
 def train(
@@ -411,8 +412,8 @@ def train(
     notes: str = "",
     patience: int = 5,
     seed: int = 42,
-    tail_weight: float = 0.3,
     lambda_v: float = 0.0,
+    ema_decay: float = 0.999,
 ):
     """
     Train the bridge model.
@@ -505,13 +506,18 @@ def train(
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, fused=True)
     scheduler = CosineAnnealingLR(optimizer, T_max=n_epochs)
 
+    # EMA shadow weights — standard diffusion practice (see I2SB). Smoothed weights
+    # are what val_epoch/sanity-checks/eval.py ultimately judge and deploy.
+    ema = ExponentialMovingAverage(model.parameters(), decay=ema_decay)
+    ema.to(device)
+
     # Resume from checkpoint if it exists
     start_epoch = 0
     best_val_loss = float("inf")
     ckpt_latest = out_dir / "checkpoint_latest.pt"
     if ckpt_latest.exists():
         start_epoch, best_val_loss = load_checkpoint(
-            ckpt_latest, model, optimizer, scheduler, device
+            ckpt_latest, model, optimizer, scheduler, ema, device
         )
         start_epoch += 1  # Start from next epoch
 
@@ -538,16 +544,15 @@ def train(
         "patience": patience,
         "seed": seed,
         "notes": notes,
-        "tail_weight": tail_weight,
         "lambda_v": lambda_v,
+        "ema_decay": ema_decay,
     }
     save_config(out_dir / "config.json", **config)
 
-    if lambda_v > 0.0 and alignment not in _ALIGNMENTS_WITH_LAMBDA_V:
+    if lambda_v > 0.0 and alignment != "dtw":
         raise ValueError(
-            f"lambda_v > 0 requires a standard DTW alpha-timeline alignment "
-            f"({', '.join(sorted(_ALIGNMENTS_WITH_LAMBDA_V))}), got '{alignment}'. "
-            f"dtw_fixed dispatches before the velocity-loss path."
+            f"lambda_v > 0 requires the DTW alpha-timeline alignment ('dtw'), got "
+            f"'{alignment}'. 'dtw_fixed' dispatches before the velocity-loss path."
         )
     if parameterization == "cfm_prewarp" and not alignment.startswith("dtw"):
         raise ValueError(
@@ -614,8 +619,8 @@ def train(
             print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
 
     # Training loop with loss history
-    train_losses = []; train_speech_losses = []; train_tail_losses = []
-    val_losses   = []; val_speech_losses   = []; val_tail_losses   = []
+    train_losses = []; train_speech_losses = []
+    val_losses   = []; val_speech_losses   = []
     cosine_sims = {}
     epochs_no_improve = 0
     print(f"[Train] Starting training for {n_epochs} epochs (patience={patience})")
@@ -627,30 +632,30 @@ def train(
             train_loss = train_epoch_profile(model, train_loader, optimizer, device, sigma_max=sigma_max)
             break  # Profile only runs once
         else:
-            train_loss, tr_sp, tr_tl, tr_vl = train_epoch(
-                model, train_loader, optimizer, device,
+            train_loss, tr_sp, tr_vl = train_epoch(
+                model, train_loader, optimizer, ema, device,
                 sigma_max=sigma_max, alignment=alignment,
-                parameterization=parameterization, tail_weight=tail_weight,
-                lambda_v=lambda_v)
+                parameterization=parameterization, lambda_v=lambda_v)
         parts = [f"speech={tr_sp:.6f}"]
-        if tail_weight > 0:
-            parts.append(f"tail={tr_tl:.6f}")
         if lambda_v > 0:
             parts.append(f"dir={tr_vl:.6f}")
         print(f"  Train loss: {train_loss:.6f}  ({',  '.join(parts)})")
-        train_losses.append(train_loss); train_speech_losses.append(tr_sp); train_tail_losses.append(tr_tl)
+        train_losses.append(train_loss); train_speech_losses.append(tr_sp)
 
-        # Validate (min-over-natives — speech/tail breakdown not available)
-        val_loss, val_sp, val_tl = val_epoch(
-            model, val_loader, device, sigma_max=sigma_max, alignment=alignment,
-            parameterization=parameterization, tail_weight=tail_weight, lambda_v=lambda_v)
-        print(f"  Val loss (min-over-natives): {val_loss:.6f}")
-        val_losses.append(val_loss); val_speech_losses.append(val_sp); val_tail_losses.append(val_tl)
+        # Validate against EMA-averaged weights — keeps "best checkpoint" selection
+        # consistent with the smoothed weights eval.py will ultimately deploy.
+        with ema.average_parameters():
+            val_loss, val_sp = val_epoch(
+                model, val_loader, device, sigma_max=sigma_max, alignment=alignment,
+                parameterization=parameterization, lambda_v=lambda_v)
+        print(f"  Val loss (min-over-natives, EMA weights): {val_loss:.6f}")
+        val_losses.append(val_loss); val_speech_losses.append(val_sp)
 
         # Sanity check: cosine sim + prediction scale on fixed sample mini-batch
+        # (run against EMA-averaged weights — see note on val_epoch above)
         if z_acc_sample is not None:
             from .diffusion import bridge_inference
-            with torch.no_grad():
+            with ema.average_parameters(), torch.no_grad():
                 z_hats = []
                 for b in range(z_acc_sample.shape[0]):
                     t_l2 = int(l2_speech_end_sample[b].item())
@@ -712,14 +717,14 @@ def train(
         scheduler.step()
 
         # Save latest checkpoint (always, for resumption)
-        save_checkpoint(ckpt_latest, model, optimizer, scheduler, epoch, best_val_loss)
+        save_checkpoint(ckpt_latest, model, optimizer, scheduler, ema, epoch, best_val_loss)
 
         # Save best checkpoint + early stopping counter
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
             ckpt_best = out_dir / "checkpoint_best.pt"
-            save_checkpoint(ckpt_best, model, optimizer, scheduler, epoch, best_val_loss)
+            save_checkpoint(ckpt_best, model, optimizer, scheduler, ema, epoch, best_val_loss)
             print(f"  ✓ New best val loss: {best_val_loss:.6f}")
         else:
             epochs_no_improve += 1
@@ -730,8 +735,8 @@ def train(
 
     # Save training history and plot
     save_history(out_dir / "history.json", train_losses, val_losses,
-                 train_speech_losses=train_speech_losses, train_tail_losses=train_tail_losses,
-                 val_speech_losses=val_speech_losses, val_tail_losses=val_tail_losses,
+                 train_speech_losses=train_speech_losses,
+                 val_speech_losses=val_speech_losses,
                  cosine_sims=cosine_sims if cosine_sims else None)
     plot_losses(out_dir / "losses.png", train_losses, val_losses)
 
@@ -763,12 +768,11 @@ if __name__ == "__main__":
         "--alignment",
         type=str,
         default="position",
-        choices=["position", "position_fixed", "dtw", "dtw_l2pad", "dtw_engpad", "dtw_fixed"],
+        choices=["position", "dtw", "dtw_fixed"],
         help=(
             "Forward process alignment. "
-            "position: full 1500-frame blend. "
-            "position_fixed: blend up to max(T_l2,T_nat), L2 tail. "
-            "dtw / dtw_l2pad / dtw_engpad: DTW alpha-timeline with N(t) morphing, L2/English tail. "
+            "position: blend up to max(T_l2,T_nat), L2 tail, no N(t) morphing (identity correspondence). "
+            "dtw: DTW alpha-timeline blend with N(t) morphing, L2 tail. "
             "dtw_fixed: fixed DTW mapping on L2 timeline, no N(t) morphing."
         ),
     )
@@ -798,9 +802,10 @@ if __name__ == "__main__":
     parser.add_argument("--notes", type=str, default="", help="Free-text note saved to config.json")
     parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (epochs without val loss improvement)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    parser.add_argument("--tail_weight", type=float, default=0.3, help="Loss weight for tail frames [T_nat:] relative to speech frames [0:T_nat] (1.0 = equal)")
     parser.add_argument("--lambda_v", type=float, default=0.0,
                         help="Weight of DTW-velocity auxiliary loss (Branch B; requires --alignment dtw --parameterization x0). 0.0 = disabled.")
+    parser.add_argument("--ema_decay", type=float, default=0.999,
+                        help="Exponential moving average decay for shadow weights (effective averaging window ~= 1/(1-decay) steps). Standard diffusion practice — see I2SB.")
 
     args = parser.parse_args()
     if args.out_dir is None:

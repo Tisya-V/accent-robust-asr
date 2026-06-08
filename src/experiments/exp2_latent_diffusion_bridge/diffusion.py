@@ -73,8 +73,9 @@ def _build_z_t_clean_position(
 ) -> torch.Tensor:
     """Bridge mean for position-aligned mode.
 
-    Speech frames [0:N(t)]: linear blend (1-t)·z_nat[i] + t·z_acc[i].
-    Tail frames [N(t):]:    z_acc[T_l2 + offset] — on-manifold L2 silence.
+    N = max(T_l2, T_nat) is fixed (no per-step morphing — see `bridge_loss`).
+    Speech frames [0:N]: linear blend (1-t)·z_nat[i] + t·z_acc[i].
+    Tail frames [N:]:    z_acc[T_l2 + offset] — on-manifold L2 silence.
     """
     B, _, D = z_nat.shape
     t_view         = t_batch.view(B, 1, 1)
@@ -94,13 +95,12 @@ def _build_z_t_clean_dtw(
     T_nat: torch.Tensor,
     N_batch: torch.Tensor,
     max_len: int,
-    dtw_tail: str,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Bridge mean for DTW-aligned mode.
 
     Speech frames [0:N(t)]: DTW alpha-timeline blend — nearest-neighbour lookup on
       t_k = t·l2_norm + (1-t)·nat_norm, then (1-t)·z_nat[nat_idx] + t·z_acc[l2_idx].
-    Tail frames [N(t):]:    L2 silence, native silence, or blend (dtw_tail flag).
+    Tail frames [N(t):]:    L2 (on-manifold accented) silence.
 
     Returns z_t_clean and intermediate tensors needed by CFM velocity target:
       (z_t_clean, speech_acc, speech_nat, speech_pos, speech_mask)
@@ -133,19 +133,11 @@ def _build_z_t_clean_dtw(
     speech_nat = torch.gather(z_nat, 1, nat_idx.unsqueeze(-1).expand(-1, -1, D))  # [B, max_N, D]
     speech     = (1 - t_view) * speech_nat + t_view * speech_acc                   # [B, max_N, D]
 
-    # Tail silence frames
+    # Tail silence frames — always L2 (on-manifold accented) silence
     max_need   = max_len - int(N_batch.min())
     tail_range = torch.arange(max_need, device=device).unsqueeze(0)
     tail_i_acc = (T_l2.long().unsqueeze(1) + tail_range).clamp(0, max_len - 1)
-    tail_i_nat = (T_nat.long().unsqueeze(1) + tail_range).clamp(0, max_len - 1)
-    tail_acc   = torch.gather(z_acc, 1, tail_i_acc.unsqueeze(-1).expand(-1, -1, D))
-    tail_nat   = torch.gather(z_nat, 1, tail_i_nat.unsqueeze(-1).expand(-1, -1, D))
-    if dtw_tail == "l2":
-        tail = tail_acc
-    elif dtw_tail == "english":
-        tail = tail_nat
-    else:  # interp
-        tail = (1 - t_view) * tail_nat + t_view * tail_acc
+    tail       = torch.gather(z_acc, 1, tail_i_acc.unsqueeze(-1).expand(-1, -1, D))
 
     # Assemble full [B, max_len, D]
     pos         = torch.arange(max_len, device=device).unsqueeze(0).expand(B, -1)
@@ -196,32 +188,28 @@ def _build_endpoint(
     return z_nat_canon, tail_mask
 
 
-def _split_loss(
+def _masked_mse(
     pred: torch.Tensor,
     target: torch.Tensor,
-    speech_mask: torch.Tensor,
-    tail_mask: torch.Tensor,
-    tail_weight: float,
+    mask: torch.Tensor,
     per_sample: bool,
 ) -> tuple[torch.Tensor, ...]:
-    """MSE split into speech [0:T_nat] (full weight) and tail [T_nat:] (downweighted).
+    """MSE over `mask` frames only — tail frames (always on-manifold L2 silence,
+    already visible to the model via cond_acc) are excluded; nothing to learn there.
 
-    per_sample=True  → returns [B] tensor (no backward; used for min-over-natives val).
-    per_sample=False → returns (total, speech_loss, tail_loss, 0.0).
+    per_sample=True  → returns ([B],) tensor (no backward; used for min-over-natives val).
+    per_sample=False → returns (loss, loss.item()).
     """
-    diff_sq   = (pred - target).pow(2)
-    sp_mask_f = (speech_mask & ~tail_mask).float().unsqueeze(-1)
-    tl_mask_f = tail_mask.float().unsqueeze(-1)
-    D         = pred.shape[-1]
+    diff_sq = (pred - target).pow(2)
+    mask_f  = mask.float().unsqueeze(-1)
+    D       = pred.shape[-1]
 
     if per_sample:
-        per_sp = (diff_sq * sp_mask_f).sum(dim=(1, 2)) / (sp_mask_f.sum(dim=(1, 2)).clamp(min=1) * D)
-        per_tl = (diff_sq * tl_mask_f).sum(dim=(1, 2)) / (tl_mask_f.sum(dim=(1, 2)).clamp(min=1) * D)
-        return (per_sp + tail_weight * per_tl,)  # tuple for consistent unpacking
+        per = (diff_sq * mask_f).sum(dim=(1, 2)) / (mask_f.sum(dim=(1, 2)).clamp(min=1) * D)
+        return (per,)
 
-    sp_loss = (diff_sq * sp_mask_f).sum() / (sp_mask_f.sum() * D)
-    tl_loss = (diff_sq * tl_mask_f).sum() / (tl_mask_f.sum().clamp(min=1) * D)
-    return sp_loss + tail_weight * tl_loss, sp_loss.item(), tl_loss.item(), 0.0
+    loss = (diff_sq * mask_f).sum() / (mask_f.sum().clamp(min=1) * D)
+    return loss, loss.item()
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +331,6 @@ def _bridge_loss_dtw_cfm_prewarp(
     T_l2: torch.Tensor,
     sigma_max: float,
     parameterization: str,  # unused — cfm_prewarp always predicts velocity
-    tail_weight: float,
     per_sample: bool,
     pos: torch.Tensor,
     max_len: int,
@@ -394,7 +381,10 @@ def _bridge_loss_dtw_cfm_prewarp(
     v_tgt[:, :max_l2, :] = (z_acc_l2 - z_nat_warped) * sm_pw[:, :max_l2].unsqueeze(-1)
 
     pred = model(z_t_pw, t_batch, z_acc)
-    return _split_loss(pred, v_tgt, sm_pw, ~sm_pw, tail_weight, per_sample)
+    if per_sample:
+        return _masked_mse(pred, v_tgt, sm_pw, per_sample=True)
+    loss, loss_val = _masked_mse(pred, v_tgt, sm_pw, per_sample=False)
+    return loss, loss_val, 0.0
 
 
 def _bridge_loss_dtw_fixed(
@@ -407,7 +397,6 @@ def _bridge_loss_dtw_fixed(
     T_l2: torch.Tensor,
     sigma_max: float,
     parameterization: str,
-    tail_weight: float,  # unused — no tail concept in fixed-timeline mode
     per_sample: bool,
     pos: torch.Tensor,
     max_len: int,
@@ -462,13 +451,10 @@ def _bridge_loss_dtw_fixed(
         z_t_l2, z_t_clean, sigma_br, z_nat_warped, sigma_fwd=sigma_fwd,
     )
 
-    sm_f    = sm.float().unsqueeze(-1)
-    diff_sq = (pred - target).pow(2)
     if per_sample:
-        per = (diff_sq * sm_f).sum(dim=(1, 2)) / (sm_f.sum(dim=(1, 2)).clamp(min=1) * D)
-        return (per,)
-    loss = (diff_sq * sm_f).sum() / (sm_f.sum().clamp(min=1) * D)
-    return loss, loss.item(), 0.0, 0.0
+        return _masked_mse(pred, target, sm, per_sample=True)
+    loss, loss_val = _masked_mse(pred, target, sm, per_sample=False)
+    return loss, loss_val, 0.0
 
 
 # Registry for DTW special-case variants that bypass the N(t) alpha-timeline path.
@@ -492,14 +478,16 @@ def bridge_loss(
     nat_speech_end: torch.Tensor,
     sigma_max: float = 0.5,
     parameterization: str = "eps",
-    tail_weight: float = 0.3,
     per_sample: bool = False,
 ) -> tuple:
     """Training loss — position-aligned bridge.
 
-    N(t) = round(t·T_l2 + (1-t)·T_nat) varies the active speech region per step.
-    Speech [0:N(t)]: frame-by-frame blend. Tail [N(t):]: z_acc silence.
-    Loss: speech frames full weight; tail frames downweighted by tail_weight.
+    Active speech region is fixed at N = max(T_l2, T_nat) — no per-step morphing,
+    since position alignment is always identity correspondence (z_nat[i] <-> z_acc[i])
+    and has no second alignment to morph between.
+    Speech [0:N]: frame-by-frame blend. Tail [N:]: z_acc silence.
+    Loss: masked MSE over canonical speech frames [0:T_nat] only — tail frames
+    (always on-manifold L2 silence) carry nothing to learn and are excluded.
     """
     B, _, D = z_nat.shape
     device  = z_nat.device
@@ -508,11 +496,8 @@ def bridge_loss(
     z_nat   = z_nat[:, :max_len, :]
     z_acc   = z_acc[:, :max_len, :]
 
-    T_l2  = l2_speech_end.float()
-    T_nat = nat_speech_end.float()
-
     t_batch = torch.rand(B, device=device, dtype=torch.float32)
-    N_batch = (t_batch * T_l2 + (1 - t_batch) * T_nat).round().long().clamp(min=1)
+    N_batch = torch.maximum(l2_speech_end, nat_speech_end).long().clamp(min=1)
 
     pos         = torch.arange(max_len, device=device).unsqueeze(0).expand(B, -1)
     speech_mask = pos < N_batch.unsqueeze(1)
@@ -524,17 +509,21 @@ def bridge_loss(
 
     z_nat_canon, tail_mask = _build_endpoint(z_nat, z_acc, nat_speech_end, l2_speech_end, max_len)
 
+    sp_mask = speech_mask & ~tail_mask
+
     # CFM velocity: (z_acc[i] - z_nat[i]) on speech-only frames
     velocity = None
     if parameterization == "cfm":
-        sp_only  = (speech_mask & ~tail_mask).unsqueeze(-1)
-        velocity = (z_acc - z_nat) * sp_only
+        velocity = (z_acc - z_nat) * sp_mask.unsqueeze(-1)
 
     param  = PARAM_REGISTRY[parameterization]
     pred   = model(z_t, t_batch, z_acc)
     target = param.compute_target(z_t, z_t_clean, sigma_br, z_nat_canon, velocity=velocity, sigma_fwd=sigma_fwd)
 
-    return _split_loss(pred, target, speech_mask, tail_mask, tail_weight, per_sample)
+    if per_sample:
+        return _masked_mse(pred, target, sp_mask, per_sample=True)
+    loss, loss_val = _masked_mse(pred, target, sp_mask, per_sample=False)
+    return loss, loss_val, 0.0
 
 
 def bridge_loss_dtw(
@@ -547,16 +536,16 @@ def bridge_loss_dtw(
     sigma_max: float = 0.5,
     parameterization: str = "eps",
     alignment: str = "dtw",
-    dtw_tail: str = "l2",
-    tail_weight: float = 0.3,
     lambda_v: float = 0.0,
     per_sample: bool = False,
 ) -> tuple:
     """Training loss — DTW-aligned bridge.
 
-    Speech frames use the DTW alpha-timeline interpolation; tail frames use
-    dtw_tail mode ("l2" | "english" | "interp"). Special-case variants in
-    _DTW_DISPATCH are dispatched before building the shared forward-process state.
+    Speech frames use the DTW alpha-timeline interpolation; tail frames use L2
+    (on-manifold accented) silence and are excluded from the loss (nothing to
+    learn there — the model already sees this content via cond_acc). Special-case
+    variants in _DTW_DISPATCH are dispatched before building the shared
+    forward-process state.
 
     path_tensor[:, :, 0] = native indices, [:, :, 1] = L2 indices.
     Paths padded to [B, max_P, 2] in collate_fn_dtw (last point repeated).
@@ -585,11 +574,11 @@ def bridge_loss_dtw(
     if dispatch_key in _DTW_DISPATCH:
         return _DTW_DISPATCH[dispatch_key](
             model, z_nat, z_acc, t_batch, l2_norm, path_tensor,
-            T_l2, sigma_max, parameterization, tail_weight, per_sample, pos, max_len,
+            T_l2, sigma_max, parameterization, per_sample, pos, max_len,
         )
 
     z_t_clean, speech_acc, speech_nat, speech_pos, speech_mask = _build_z_t_clean_dtw(
-        z_nat, z_acc, t_batch, path_tensor, T_l2, T_nat, N_batch, max_len, dtw_tail,
+        z_nat, z_acc, t_batch, path_tensor, T_l2, T_nat, N_batch, max_len,
     )
     sigma_br  = sigma_bridge(t_batch, sigma_max).view(B, 1, 1)
     sigma_fwd = (sigma_max * t_batch.sqrt()).view(B, 1, 1)
@@ -609,13 +598,16 @@ def bridge_loss_dtw(
     pred   = model(z_t, t_batch, z_acc)
     target = param.compute_target(z_t, z_t_clean, sigma_br, z_nat_canon, velocity=velocity, sigma_fwd=sigma_fwd)
 
-    result = _split_loss(pred, target, speech_mask, tail_mask, tail_weight, per_sample)
+    sp_mask = speech_mask & ~tail_mask
+    if per_sample:
+        return _masked_mse(pred, target, sp_mask, per_sample=True)
+    loss, loss_val = _masked_mse(pred, target, sp_mask, per_sample=False)
 
     # DTW-direction auxiliary loss (x0 only, lambda_v > 0)
     # Penalises the angle between the predicted and true correction directions
     # at each DTW-matched frame pair, weighted by ||dir_true|| so frames with
     # large accent deviation dominate near-identical frames.
-    if lambda_v > 0.0 and not per_sample:
+    if lambda_v > 0.0:
         if parameterization != "x0":
             raise ValueError("lambda_v > 0 requires parameterization='x0'")
         # _build_z_t_clean_dtw doesn't return nat_idx/l2_idx so we re-derive them here.
@@ -650,10 +642,9 @@ def bridge_loss_dtw(
         cos      = F.cosine_similarity(dir_pred, dir_true, dim=-1, eps=1e-8).unsqueeze(-1)
         vel_loss = ((1 - cos) * weight * path_speech).sum() / (weight * path_speech).sum().clamp(min=1e-8)
 
-        total, sp, tl, _ = result
-        return total + lambda_v * vel_loss, sp, tl, vel_loss.item()
+        return loss + lambda_v * vel_loss, loss_val, vel_loss.item()
 
-    return result
+    return loss, loss_val, 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -663,31 +654,48 @@ def bridge_loss_dtw(
 def bridge_inference(
     model: nn.Module,
     z_acc: torch.Tensor,
-    T_l2: int,
-    T_nat: int,
+    T_l2: int | torch.Tensor,
+    T_nat: int | torch.Tensor,
     n_steps: int = 20,
     sigma_max: float = 2.0,
     parameterization: str = "eps",
+    key_padding_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Reverse diffusion — shared by position and DTW alignments.
+    """Reverse diffusion — shared by position and DTW alignments. Batched: each
+    sample gets its own (T_l2, T_nat) and active/silence schedule.
 
-    Active speech region at each step: [0:N(t)] where N(t) = round(t·T_l2 + (1-t)·T_nat).
-    Frames [N(t):] are held at on-manifold silence (z_acc[T_l2:]) throughout.
+    Active speech region at each step: [0:N(t)] where N(t) = round(t·T_l2 + (1-t)·T_nat),
+    computed independently per sample. Frames [N(t):] are held at on-manifold silence
+    (z_acc[T_l2:]) throughout.
 
     Args:
         model:     BridgeTransformer
         z_acc:     [B, 1500, 768] accented encoder states
-        T_l2:      accented speech end frame
-        T_nat:     predicted native speech end frame
+        T_l2:      accented speech end frame — scalar (broadcasts to all B) or [B] tensor
+        T_nat:     predicted native speech end frame — scalar (broadcasts) or [B] tensor
         n_steps:   ODE steps
         sigma_max: must match training value
+        key_padding_mask: optional [B, 1500] bool, True = real frame / False = padding.
+            Required when batching utterances with different `inf_len` (see below) —
+            proven equivalent to running each sample at its own length alone (the
+            padded-key positions contribute nothing to attention for real positions).
     """
     B, L, D = z_acc.shape
     device, dtype = z_acc.device, z_acc.dtype
 
-    # Crop to training distribution — frames beyond max(T_l2, T_nat) are OOD
-    inf_len    = max(T_l2, T_nat) + 1
+    # Broadcast scalar T_l2/T_nat (today's calling convention -- train.py's sanity
+    # check, and any single-utterance caller) to [B] tensors with the same value;
+    # already-[B] tensors (the new batched eval.py call site) pass through unchanged.
+    T_l2  = torch.as_tensor(T_l2,  device=device, dtype=torch.long).expand(B).contiguous()
+    T_nat = torch.as_tensor(T_nat, device=device, dtype=torch.long).expand(B).contiguous()
+
+    # Crop to training distribution -- frames beyond max(T_l2, T_nat) are OOD. For a
+    # batch this is the largest per-sample boundary; since N(t) is always a convex
+    # combination of T_l2 and T_nat, every sample's active region N(t) <= max(T_l2,
+    # T_nat) < inf_len, so it always lies inside this shared crop.
+    inf_len    = int(torch.maximum(T_l2, T_nat).max().item()) + 1
     z_acc_crop = z_acc[:, :inf_len, :]
+    kpm_crop   = key_padding_mask[:, :inf_len] if key_padding_mask is not None else None
 
     t_schedule = torch.linspace(1.0, 0.0, n_steps + 1, device=device, dtype=dtype)
     z_t        = z_acc.clone()
@@ -695,16 +703,37 @@ def bridge_inference(
     is_cfm = parameterization in ("cfm", "cfm_prewarp")
     param  = PARAM_REGISTRY.get(parameterization)  # None for cfm_prewarp (uses Euler)
 
-    def _sil_src(N_t: int) -> torch.Tensor:
-        """z_acc indices for silence tail starting at N_t."""
-        return torch.arange(T_l2, T_l2 + (L - N_t), device=device).clamp(max=L - 1)
+    j = torch.arange(L, device=device)
 
-    def _apply_mask(z: torch.Tensor, t: float) -> torch.Tensor:
-        N_t = min(max(1, round(float(t) * T_l2 + (1 - float(t)) * T_nat)), L)
-        z[:, N_t:, :] = z_acc[:, _sil_src(N_t), :]
-        return z
+    def _fill_silence(z: torch.Tensor, boundary: torch.Tensor) -> torch.Tensor:
+        """z[b, boundary[b]:, :] <- on-manifold L2 silence tiled from z_acc[b, T_l2[b]:].
 
-    z_t = _apply_mask(z_t, t_schedule[0].item())
+        Vectorized form of the original scalar
+        `z[:, N_t:, :] = z_acc[:, _sil_src(N_t), :]` where
+        `_sil_src(N_t) = arange(T_l2, T_l2 + (L - N_t)).clamp(max=L-1)`
+        i.e. source index for destination j>=boundary is `clamp(T_l2 + (j - boundary), 0, L-1)`
+        -- exactly what src_idx computes below (mirrors the gather+where vectorization
+        already used for DTW pre-warp index lookups at train.py:585-594).
+        """
+        fill    = j.unsqueeze(0) >= boundary.unsqueeze(1)                                       # [B, L]
+        src_idx = (T_l2.unsqueeze(1) + (j.unsqueeze(0) - boundary.unsqueeze(1))).clamp(0, L - 1) # [B, L]
+        z_sil   = torch.gather(z_acc, 1, src_idx.unsqueeze(-1).expand(-1, -1, D))
+        return torch.where(fill.unsqueeze(-1), z_sil, z)
+
+    def _active_boundary(t: float) -> torch.Tensor:
+        """N(t) = round(t·T_l2 + (1-t)·T_nat) per sample, clamped to [1, L].
+
+        Computed in float64 to bit-match the original scalar Python arithmetic
+        `min(max(1, round(float(t)*T_l2 + (1-float(t))*T_nat)), L)`: `float(t)` is
+        already a Python double, Python ints promote to float64 in the multiply, and
+        both Python's `round` and `torch.round` use round-half-to-even -- so this
+        reproduces the exact same per-sample integer, not an approximation of it.
+        """
+        t64 = float(t)
+        N_t = torch.round(t64 * T_l2.double() + (1.0 - t64) * T_nat.double())
+        return N_t.long().clamp(1, L)
+
+    z_t = _fill_silence(z_t, _active_boundary(t_schedule[0].item()))
 
     model.eval()
     with torch.no_grad():
@@ -715,15 +744,15 @@ def bridge_inference(
 
             if is_cfm:
                 # Euler step: z_{t-dt} = z_t - v·dt
-                v_pred = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop)
+                v_pred = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop, key_padding_mask=kpm_crop)
                 dt = (t_cur - t_next).item()
                 z_t[:, :inf_len, :] = z_t[:, :inf_len, :] - v_pred * dt
                 if parameterization == "cfm":
-                    z_t = _apply_mask(z_t, t_next.item())  # cfm_prewarp: no mask, region stays at T_l2
+                    z_t = _fill_silence(z_t, _active_boundary(t_next.item()))  # cfm_prewarp: no mask, region stays at T_l2
                 continue
 
             # x0-recovery path (eps and x0)
-            model_out      = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop)
+            model_out      = model(z_t[:, :inf_len, :], t_cur_batch, z_acc_crop, key_padding_mask=kpm_crop)
             sigma_br_cur   = sigma_bridge(t_cur, sigma_max)
             sigma_fwd_cur  = sigma_max * (t_cur ** 0.5)
             z_nat_hat_crop = param.recover_x0(
@@ -743,17 +772,14 @@ def bridge_inference(
                 # SDE posterior noise: σ(t',t) = sigma_max·√(t'·(t-t')/t)
                 noise_std = sigma_max * torch.sqrt((t_next * (t_cur - t_next) / t_cur).clamp(min=0.0))
                 z_t[:, :inf_len, :] += noise_std * torch.randn(B, inf_len, D, device=device, dtype=dtype)
-            z_t = _apply_mask(z_t, t_next.item())
+            z_t = _fill_silence(z_t, _active_boundary(t_next.item()))
 
     # Final silence enforcement
     if parameterization == "cfm":
-        z_t[:, T_nat:, :] = z_acc[:, _sil_src(T_nat), :]
-        return z_t
+        return _fill_silence(z_t, T_nat)
     if parameterization == "cfm_prewarp":
-        z_t[:, T_l2:, :] = z_acc[:, _sil_src(T_l2), :]
-        return z_t
-    z_nat_hat[:, T_nat:, :] = z_acc[:, _sil_src(T_nat), :]
-    return z_nat_hat
+        return _fill_silence(z_t, T_l2)
+    return _fill_silence(z_nat_hat, T_nat)
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .rotary_embedding import build_rope_cache, apply_rotary_emb_func
+
 
 class TimestepEmbedding(nn.Module):
     """Sinusoidal positional encoding + learned MLP for timesteps t ∈ [0,1]."""
@@ -101,11 +103,18 @@ class AdaLNBlock(nn.Module):
         nn.init.constant_(self.adaLN_proj.weight, 0)
         nn.init.constant_(self.adaLN_proj.bias, 0)
 
-    def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t_emb: torch.Tensor,
+                cos: torch.Tensor, sin: torch.Tensor,
+                key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
-            x: [B, L, D] sequence
-            t_emb: [B, D] timestep embedding
+            x:      [B, L, D] sequence
+            t_emb:  [B, D] timestep embedding
+            cos, sin: [L, head_dim/2] RoPE tables, pre-sliced to this sequence's length
+            key_padding_mask: optional [B, L] bool, True = attend to this key position,
+                False = padding to exclude. Broadcasts over heads and query positions —
+                proven equivalent to cropping the sequence to the real length (see SDPA
+                call below); lets a batch mix sequences of different lengths exactly.
 
         Returns:
             out: [B, L, D]
@@ -122,13 +131,28 @@ class AdaLNBlock(nn.Module):
         # AdaLN-Zero: modulate with (1 + gamma) * scale + beta * shift
         normed = normed * (1.0 + gamma1.unsqueeze(1)) + beta1.unsqueeze(1)  # [B, L, D]
 
-        # Project to Q, K, V
-        q = self.q_proj(normed).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)  # [B, H, L, D/H]
-        k = self.k_proj(normed).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(normed).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)
+        # Project to Q, K, V. Keep (B, L, H, D/H) layout for Q/K -- the fused RoPE
+        # kernel expects (batch, seqlen, nheads, headdim), i.e. seqlen BEFORE nheads,
+        # which is the layout produced by .view() before the SDPA .transpose(1, 2).
+        q = self.q_proj(normed).view(B, L, self.n_heads, self.head_dim)                 # [B, L, H, D/H]
+        k = self.k_proj(normed).view(B, L, self.n_heads, self.head_dim)                 # [B, L, H, D/H]
+        v = self.v_proj(normed).view(B, L, self.n_heads, self.head_dim).transpose(1, 2) # [B, H, L, D/H]
 
-        # Flash attention (memory-efficient, uses fused kernels)
-        attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_dropout.p if self.training else 0.0)
+        # Rotary position embedding -- rotate Q and K only (V is untouched), then
+        # transpose into SDPA's expected [B, H, L, D/H] layout. inplace=True is safe:
+        # q/k are fresh tensors from independent q_proj/k_proj outputs, not aliased
+        # views into a shared packed-QKV tensor.
+        q = apply_rotary_emb_func(q, cos, sin, False, True).transpose(1, 2)  # [B, H, L, D/H]
+        k = apply_rotary_emb_func(k, cos, sin, False, True).transpose(1, 2)  # [B, H, L, D/H]
+
+        # Flash attention (memory-efficient, uses fused kernels). attn_mask broadcasts
+        # [B, 1, 1, L] over heads and query positions -- masking out padded keys here
+        # is mathematically identical to running the cropped (unpadded) sequence alone.
+        attn_mask = key_padding_mask[:, None, None, :] if key_padding_mask is not None else None
+        attn_out = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask,
+            dropout_p=self.attn_dropout.p if self.training else 0.0,
+        )
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, L, D)
         attn_out = self.out_proj(attn_out)
 
@@ -184,6 +208,20 @@ class BridgeTransformer(nn.Module):
         in_dim = latent_dim * 2 if cond_acc else latent_dim
         self.proj_in = nn.Linear(in_dim, d_model)
 
+        # RoPE cache — built once for the fixed 1500-frame buffer length every
+        # encoder state is stored at (BridgeDataset asserts z_acc/z_nat are always
+        # [1500, 768]). Full rotary (n_elem == head_dim), matching the dominant
+        # convention elsewhere in this repo's transformer configs. Registered as
+        # non-persistent buffers: they move/cast automatically with model.to(device,
+        # dtype) and are excluded from checkpoint state_dicts (no learnable
+        # parameters -> no key-mismatch risk when loading old checkpoints).
+        head_dim = d_model // n_heads
+        rope_cos, rope_sin = build_rope_cache(
+            seq_len=1500, n_elem=head_dim, dtype=torch.float32, device=torch.device("cpu")
+        )
+        self.register_buffer("rope_cos", rope_cos, persistent=False)
+        self.register_buffer("rope_sin", rope_sin, persistent=False)
+
         # Timestep embedding
         self.time_embedding = TimestepEmbedding(d_model)
 
@@ -206,13 +244,16 @@ class BridgeTransformer(nn.Module):
         nn.init.zeros_(self.proj_out.bias)
 
     def forward(self, z_t: torch.Tensor, t: torch.Tensor,
-                z_acc: Optional[torch.Tensor] = None) -> torch.Tensor:
+                z_acc: Optional[torch.Tensor] = None,
+                key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
             z_t:   [B, L, 768] noisy latent at timestep t
             t:     [B] timesteps in [0, 1]
             z_acc: [B, L, 768] accented encoder states — required if cond_acc=True,
                    ignored otherwise (I²SB cond_acc)
+            key_padding_mask: optional [B, L] bool, True = real frame, False = padding —
+                   forwarded unchanged to every block's attention (see AdaLNBlock.forward)
 
         Returns:
             eps_pred: [B, L, 768] predicted noise
@@ -226,8 +267,14 @@ class BridgeTransformer(nn.Module):
         x = self.proj_in(x)              # [B, L, d_model]
         t_emb = self.time_embedding(t)   # [B, d_model]
 
+        # Slice the precomputed RoPE tables to this batch's actual sequence length --
+        # max_len varies per batch (max(speech_end) + 1 <= 1500), it is not always
+        # the full 1500-frame buffer.
+        L = z_t.shape[1]
+        cos, sin = self.rope_cos[:L], self.rope_sin[:L]
+
         for block in self.blocks:
-            x = block(x, t_emb)
+            x = block(x, t_emb, cos, sin, key_padding_mask=key_padding_mask)
 
         x = self.norm_final(x)
         out = self.proj_out(x)           # [B, L, 768]

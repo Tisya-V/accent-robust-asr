@@ -42,7 +42,10 @@ except LookupError:
 
 import g2p_en
 
-BATCH_SIZE = 16
+BATCH_SIZE = 16              # Whisper decode batch size (Phase 2 -- full 1500-frame sequences)
+BRIDGE_BATCH_SIZE = 64       # Bridge ODE batch size (Phase 1 -- ~1.4GB activations on A30 24GB
+                             # at d_model=768; utterances are sorted by inf_len before chunking
+                             # so each batch's shared crop length stays close to every member's own)
 _G2P = g2p_en.G2p()
 
 
@@ -100,6 +103,17 @@ def load_bridge_model(
     )
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
+
+    # Bake EMA-smoothed weights into the model permanently — eval should run on the
+    # same weights val_epoch judged "best" during training, not the noisier raw
+    # live weights. Pre-EMA checkpoints (no "ema_state_dict") fall through unchanged.
+    if "ema_state_dict" in ckpt:
+        from torch_ema import ExponentialMovingAverage
+        ema = ExponentialMovingAverage(model.parameters(), decay=cfg.get("ema_decay", 0.999))
+        ema.load_state_dict(ckpt["ema_state_dict"])
+        ema.copy_to(model.parameters())
+        print(f"[Eval] Baked EMA-averaged weights into model from {ckpt_path}")
+
     model = model.to(device, dtype=torch.bfloat16)
     model.eval()
     return model
@@ -137,47 +151,53 @@ def load_tnat_predictor(
     return predictor
 
 
-def bridge_inference_single(
-    bridge: torch.nn.Module,
-    z_acc: torch.Tensor,
+def _predict_t_nat(
     T_l2: int,
-    n_steps: int = 20,
-    sigma_max: float = 2.0,
-    device: torch.device = torch.device("cpu"),
-    parameterization: str = "eps",
-    alignment: str = "dtw",
-    predictor: Optional[torch.nn.Module] = None,
-    tnat_buffer: int = 0,
-) -> torch.Tensor:
-    """Bridge inference for a single [1500, 768] latent.
-
-    For dtw_fixed: T_nat is fixed to T_l2 — the bridge runs entirely in L2 frame space
-    with no N(t) morphing, so T_nat prediction is meaningless and skipped.
-    For all other alignments: T_nat is predicted via `predictor` if provided, else T_l2.
-    """
-    from .diffusion import bridge_inference
+    z_acc_dev: torch.Tensor,
+    predictor: Optional[torch.nn.Module],
+    tnat_buffer: int,
+    device: torch.device,
+) -> int:
+    """Estimate T_nat from pooled accented features via `predictor`; T_l2 if no predictor."""
+    if predictor is None:
+        return T_l2
     from .train_tnat_predictor import T_NORM
-
-    z_acc_dev = z_acc.to(device=device, dtype=torch.float32)
-
-    if alignment == "dtw_fixed":
-        T_nat = T_l2
-    elif predictor is not None:
-        with torch.no_grad():
-            pool   = z_acc_dev[:T_l2].mean(dim=0, keepdim=True)
-            t_l2_n = torch.tensor([[T_l2 / T_NORM]], device=device)
-            T_nat  = int(round(predictor(pool, t_l2_n.squeeze(-1)).item() * T_NORM))
-        T_nat = max(1, min(T_nat + tnat_buffer, 1500))
-    else:
-        T_nat = T_l2
-
-    z_acc_bf16 = z_acc_dev.to(torch.bfloat16).unsqueeze(0)  # [1, 1500, 768]
     with torch.no_grad():
-        z_nat_hat = bridge_inference(
-            bridge, z_acc_bf16, T_l2=T_l2, T_nat=T_nat,
-            n_steps=n_steps, sigma_max=sigma_max, parameterization=parameterization,
-        )
-    return z_nat_hat.squeeze(0).float().cpu()  # [1500, 768]
+        pool   = z_acc_dev[:T_l2].mean(dim=0, keepdim=True)
+        t_l2_n = torch.tensor([[T_l2 / T_NORM]], device=device)
+        T_nat  = int(round(predictor(pool, t_l2_n.squeeze(-1)).item() * T_NORM))
+    return max(1, min(T_nat + tnat_buffer, 1500))
+
+
+def _resolve_inference_lengths(
+    alignment: str,
+    T_l2: int,
+    z_acc_dev: torch.Tensor,
+    predictor: Optional[torch.nn.Module],
+    tnat_buffer: int,
+    device: torch.device,
+) -> tuple[int, int]:
+    """Resolve the (T_l2, T_nat) pair to pass into `bridge_inference` for `alignment`.
+
+    - dtw_fixed: no N(t) morphing, runs entirely in L2 frame space — T_nat := T_l2,
+      T_nat prediction is meaningless and skipped.
+    - position: no N(t) morphing either — identity correspondence has no second
+      alignment to morph between, so the active region is fixed at the constant
+      max(T_l2, predicted T_nat); both endpoints collapse to that span, mirroring
+      dtw_fixed's collapse to a constant.
+    - dtw: N(t) genuinely morphs between T_l2 and predicted T_nat — pass both through
+      unchanged.
+    """
+    if alignment == "dtw_fixed":
+        return T_l2, T_l2
+
+    T_nat = _predict_t_nat(T_l2, z_acc_dev, predictor, tnat_buffer, device)
+
+    if alignment == "position":
+        span = max(T_l2, T_nat)
+        return span, span
+
+    return T_l2, T_nat
 
 
 def transcribe_with_bridge(
@@ -206,39 +226,80 @@ def transcribe_with_bridge(
 
     parameterization = getattr(bridge, "parameterization", "eps")
 
-    # --- Phase 1: bridge inference ---
-    z_nat_hats: list[torch.Tensor | None] = []
-    for utt in tqdm(utterances, desc="  bridge inference", unit="utt"):
+    from .diffusion import bridge_inference
+
+    # --- Phase 0: resolve (state_path, T_l2, T_nat, inf_len) per utterance ---
+    # Store only the resolved path + lengths here, NOT the loaded [1500, 768] float32
+    # tensor (~4.4MB each -- ~34GB across the full test set). Holding all of them
+    # simultaneously (to enable sorting before batching) on top of the z_nat_hats
+    # accumulation in Phase 1 (which grows to a similar ~34GB) is what pushed peak
+    # host memory past the SLURM --mem=64G ceiling and triggered an oom_kill at
+    # batch 106/122. z_acc is reloaded on demand, per batch, in Phase 1 below --
+    # restoring the streaming memory profile the original sequential code had, at
+    # the cost of reading each .pt file from disk twice (cheap: Phase 0 alone reads
+    # all 7796 files in ~8 minutes).
+    info: list[tuple[Path, int, int, int] | None] = []  # (state_path, T_l2, T_nat, inf_len) or None if skipped
+
+    for utt in tqdm(utterances, desc="  resolving lengths", unit="utt"):
         speaker      = utt["speaker"]
         utterance_id = utt["utterance_id"]
 
         z_acc = None
+        state_path = None
         for split in ["train", "dev", "test"]:
-            split_dir  = get_split_data_dir(split)
-            state_path = split_dir / speaker / f"{speaker}_{utterance_id}.pt"
-            if not state_path.exists():
-                state_path = split_dir / speaker / f"{utterance_id}.pt"
-            if state_path.exists():
+            split_dir = get_split_data_dir(split)
+            candidate = split_dir / speaker / f"{speaker}_{utterance_id}.pt"
+            if not candidate.exists():
+                candidate = split_dir / speaker / f"{utterance_id}.pt"
+            if candidate.exists():
+                state_path = candidate
                 z_acc = load_encoder_state(state_path)
                 break
 
         if z_acc is None:
             print(f"[WARN] Could not find encoder state for {speaker}/{utterance_id}")
-            z_nat_hats.append(None)
+            info.append(None)
             continue
 
         speech_end = utt.get("speech_end_frame")
         if speech_end is None:
             print(f"[WARN] No speech_end_frame for {utt['speaker']}/{utt['utterance_id']} — skipping")
-            z_nat_hats.append(None)
+            info.append(None)
             continue
-        z_hat = bridge_inference_single(
-            bridge, z_acc, T_l2=speech_end,
-            n_steps=n_steps, sigma_max=sigma_max,
-            device=device, parameterization=parameterization,
-            alignment=alignment, predictor=predictor, tnat_buffer=tnat_buffer,
-        )
-        z_nat_hats.append(z_hat)  # [1500, 768] float32 on CPU
+
+        z_acc_dev   = z_acc.to(device=device, dtype=torch.float32)
+        T_l2, T_nat = _resolve_inference_lengths(alignment, speech_end, z_acc_dev, predictor, tnat_buffer, device)
+        info.append((state_path, T_l2, T_nat, max(T_l2, T_nat) + 1))
+
+    # --- Phase 1: batched bridge ODE inference, sorted by inf_len so each batch's
+    # shared crop length stays close to every member's own (minimizes padding waste).
+    # z_acc is reloaded from disk per chunk, in sorted order -- see Phase 0 comment. ---
+    valid_idx = [i for i, x in enumerate(info) if x is not None]
+    order     = sorted(valid_idx, key=lambda i: info[i][3])
+
+    z_nat_hats: list[torch.Tensor | None] = [None] * len(utterances)
+
+    for chunk_start in tqdm(range(0, len(order), BRIDGE_BATCH_SIZE),
+                            desc="  bridge inference", unit="batch"):
+        chunk = order[chunk_start : chunk_start + BRIDGE_BATCH_SIZE]
+
+        z_acc_batch = torch.stack([load_encoder_state(info[i][0]) for i in chunk]).to(device=device, dtype=torch.bfloat16)  # [B, 1500, 768]
+        T_l2_batch  = torch.tensor([info[i][1] for i in chunk], device=device, dtype=torch.long)
+        T_nat_batch = torch.tensor([info[i][2] for i in chunk], device=device, dtype=torch.long)
+        inf_lens    = torch.tensor([info[i][3] for i in chunk], device=device, dtype=torch.long)
+        L_buf       = z_acc_batch.shape[1]
+        kpm         = (torch.arange(L_buf, device=device).unsqueeze(0) < inf_lens.unsqueeze(1))  # [B, L] True=real
+
+        with torch.no_grad():
+            z_hat_batch = bridge_inference(
+                bridge, z_acc_batch, T_l2=T_l2_batch, T_nat=T_nat_batch,
+                n_steps=n_steps, sigma_max=sigma_max, parameterization=parameterization,
+                key_padding_mask=kpm,
+            )
+
+        z_hat_batch = z_hat_batch.float().cpu()
+        for j, i in enumerate(chunk):
+            z_nat_hats[i] = z_hat_batch[j]  # [1500, 768] float32 CPU
 
     # --- Phase 2: batched Whisper decode ---
     # All z_nat_hat are [1500, 768] — no padding needed.
@@ -424,6 +485,7 @@ def evaluate_bridge(
 
     # Per-L1 breakdown
     print(f"\n[Per-L1 Breakdown]")
+    per_l1 = {}
     for l1 in sorted(set(u["l1"] for u in test_utts)):
         l1_results = results[results["l1"] == l1]
         if len(l1_results) > 0:
@@ -431,7 +493,25 @@ def evaluate_bridge(
                 l1_results["reference_norm"].tolist(),
                 l1_results["prediction_norm"].tolist(),
             )
-            print(f"  {l1:12s}: WER={float(l1_measures.wer):.3f}  ({len(l1_results)} utts)")
+            l1_wer = float(l1_measures.wer)
+            per_l1[l1] = {"wer": l1_wer, "n_utts": len(l1_results)}
+            print(f"  {l1:12s}: WER={l1_wer:.3f}  ({len(l1_results)} utts)")
+
+    # Save the summary (results + breakdown) next to config.json/history.json so the
+    # model's setup and its eval outcome can be checked together in one place.
+    # n_test_utts + max_utts_per_speaker reveal whether this ran on a subsample.
+    summary = {
+        "wer": wer,
+        "mer": mer,
+        "per": float(per_vals.mean()) if len(per_vals) else None,
+        "n_test_utts": len(test_utts),
+        "max_utts_per_speaker": max_utts_per_speaker,
+        "per_l1": per_l1,
+        "predictions_csv": str(out_path),
+    }
+    summary_path = bridge_ckpt.parent / "eval_summary.json"
+    summary_path.write_text(_json.dumps(summary, indent=2))
+    print(f"  Saved summary: {summary_path}")
 
     torch.cuda.empty_cache()
 

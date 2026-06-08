@@ -1,11 +1,53 @@
-# Copyright (c) 2023, Tri Dao.
+"""Rotary Position Embeddings (RoPE) for BridgeTransformer.
 
-import math
-from typing import Optional, Tuple
+Two pieces, ported and adapted to be self-contained (decoupled from the
+project's legacy src/training/lit_gpt package, which targets a different
+decoder architecture and is not importable as-is from here):
 
-import rotary_emb
+  build_rope_cache    — precomputes cos/sin rotation tables. Adapted from the
+                        GPT-NeoX / labml_nn reference recipe (MIT licensed):
+                        https://github.com/labmlai/annotated_deep_learning_paper_implementations/blob/master/labml_nn/transformers/rope/__init__.py
+
+  apply_rotary_emb_func — fused CUDA rotary kernel wrapper, copied verbatim
+                        (Copyright (c) 2023, Tri Dao) from the flash-attention
+                        rotary embedding implementation, backed by the
+                        `rotary_emb` package.
+"""
+
 import torch
-from einops import rearrange, repeat
+import rotary_emb
+from einops import rearrange
+
+
+def build_rope_cache(
+    seq_len: int,
+    n_elem: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    base: int = 10000,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Precompute RoPE cos/sin tables.
+
+    Args:
+        seq_len: maximum sequence length to precompute positions for
+        n_elem:  rotary dimension (use head_dim for full rotary)
+        dtype:   output dtype (tables are computed in fp32, then cast)
+        device:  output device
+
+    Returns:
+        (cos, sin), each of shape [seq_len, n_elem // 2]
+    """
+    theta = 1.0 / (base ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem))
+    seq_idx = torch.arange(seq_len, device=device).float()
+    idx_theta = torch.outer(seq_idx, theta)  # [seq_len, n_elem // 2]
+    cos, sin = torch.cos(idx_theta), torch.sin(idx_theta)
+    return cos.to(dtype), sin.to(dtype)
+
+
+# --- Copyright (c) 2023, Tri Dao. ---
+# Verbatim copy of the flash-attention fused rotary embedding wrapper
+# (decoupled here from src/training/lit_gpt, which wraps it for a different
+# decoder architecture and is not cleanly importable from this experiment).
 
 class ApplyRotaryEmb(torch.autograd.Function):
     @staticmethod
@@ -88,4 +130,3 @@ class ApplyRotaryEmb(torch.autograd.Function):
 
 
 apply_rotary_emb_func = ApplyRotaryEmb.apply
-
