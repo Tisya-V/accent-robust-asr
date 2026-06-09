@@ -1,0 +1,21 @@
+{
+  "alignment": "dtw_fixed",
+  "n_epochs": 35,
+  "batch_size": 16,
+  "lr": 0.0001,
+  "weight_decay": 0.0001,
+  "sigma_max": 0.5,
+  "cond_acc": true,
+  "parameterization": "x0",
+  "num_workers": 6,
+  "model": "BridgeTransformer",
+  "d_model": 768,
+  "n_layers": 4,
+  "n_heads": 12,
+  "dim_feedforward": 3072,
+  "patience": 8,
+  "seed": 42,
+  "notes": "v2 data, i2sb style target formulation and training, now with PEs, EMA and batch inference",
+  "lambda_v": 0.0,
+  "ema_decay": 0.99
+}

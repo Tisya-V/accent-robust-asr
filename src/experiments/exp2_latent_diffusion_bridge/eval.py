@@ -214,6 +214,7 @@ def transcribe_with_bridge(
     predictor: Optional[torch.nn.Module] = None,
     tnat_buffer: int = 0,
     anti_rep_safety: bool = False,
+    norm_renorm: bool = False,
 ) -> list[str]:
     """
     Transcribe utterances using bridge-corrected encoder states.
@@ -300,6 +301,19 @@ def transcribe_with_bridge(
                 key_padding_mask=kpm,
             )
 
+        if norm_renorm:
+            # Rescale z_hat speech frames so their mean per-frame norm matches z_acc.
+            # Mode-averaging in the x0/eps objective undershoots norms (~38.5 vs ~41.7),
+            # pushing z_hat off the Whisper encoder manifold and causing hallucinations.
+            z_hat_f = z_hat_batch.float()
+            z_acc_f = z_acc_batch.float()
+            for j in range(z_hat_f.shape[0]):
+                T = T_l2_batch[j].item()
+                hat_norm = z_hat_f[j, :T].norm(dim=-1).mean().clamp(min=1e-6)
+                acc_norm = z_acc_f[j, :T].norm(dim=-1).mean()
+                z_hat_f[j, :T] = z_hat_f[j, :T] * (acc_norm / hat_norm)
+            z_hat_batch = z_hat_f.to(z_hat_batch.dtype)
+
         z_hat_batch = z_hat_batch.float().cpu()
         for j, i in enumerate(chunk):
             z_nat_hats[i] = z_hat_batch[j]  # [1500, 768] float32 CPU
@@ -382,6 +396,7 @@ def evaluate_bridge(
     predictor_ckpt: str | Path | None = None,
     tnat_buffer: int = 0,
     anti_rep_safety: bool = False,
+    norm_renorm: bool = False,
     seed: int = RANDOM_SEED,
 ) -> None:
     """
@@ -490,6 +505,7 @@ def evaluate_bridge(
         predictor=predictor,
         tnat_buffer=tnat_buffer,
         anti_rep_safety=anti_rep_safety,
+        norm_renorm=norm_renorm,
     )
 
     # Build results
@@ -636,6 +652,13 @@ if __name__ == "__main__":
              "repetition collapse vs. something deeper",
     )
     parser.add_argument(
+        "--norm_renorm",
+        action="store_true",
+        help="Rescale z_hat speech frames so their mean per-frame norm matches z_acc. "
+             "Counteracts mode-averaging norm undershooting (~38.5 vs ~41.7) that pushes "
+             "predictions off the Whisper encoder manifold and causes hallucinations.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=RANDOM_SEED,
@@ -656,5 +679,6 @@ if __name__ == "__main__":
         predictor_ckpt=args.predictor_ckpt,
         tnat_buffer=args.tnat_buffer,
         anti_rep_safety=args.anti_rep_safety,
+        norm_renorm=args.norm_renorm,
         seed=args.seed,
     )

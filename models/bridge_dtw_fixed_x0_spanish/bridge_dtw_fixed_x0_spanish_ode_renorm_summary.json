@@ -1,0 +1,17 @@
+{
+  "wer": 0.2523218082130469,
+  "mer": 0.24158988643668308,
+  "per": 0.16372653338445003,
+  "n_test_utts": 1007,
+  "max_utts_per_speaker": null,
+  "sigma_max": 0.5,
+  "ode_sampling": true,
+  "seed": 42,
+  "per_l1": {
+    "Spanish": {
+      "wer": 0.2523218082130469,
+      "n_utts": 1007
+    }
+  },
+  "predictions_csv": "results/bridge_eval/bridge_dtw_fixed_x0_spanish_ode_renorm.csv"
+}
