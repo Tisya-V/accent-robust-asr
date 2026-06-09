@@ -334,6 +334,7 @@ def _bridge_loss_dtw_cfm_prewarp(
     per_sample: bool,
     pos: torch.Tensor,
     max_len: int,
+    return_x0: bool = False,
 ) -> tuple:
     """CFM-prewarp training loss (DTW-only).
 
@@ -384,7 +385,7 @@ def _bridge_loss_dtw_cfm_prewarp(
     if per_sample:
         return _masked_mse(pred, v_tgt, sm_pw, per_sample=True)
     loss, loss_val = _masked_mse(pred, v_tgt, sm_pw, per_sample=False)
-    return loss, loss_val, 0.0
+    return loss, loss_val, 0.0, None  # x0_hat N/A for cfm_prewarp (Euler parameterization)
 
 
 def _bridge_loss_dtw_fixed(
@@ -400,6 +401,7 @@ def _bridge_loss_dtw_fixed(
     per_sample: bool,
     pos: torch.Tensor,
     max_len: int,
+    return_x0: bool = False,
 ) -> tuple:
     """Fixed-timeline DTW bridge loss (eps / x0).
 
@@ -454,7 +456,13 @@ def _bridge_loss_dtw_fixed(
     if per_sample:
         return _masked_mse(pred, target, sm, per_sample=True)
     loss, loss_val = _masked_mse(pred, target, sm, per_sample=False)
-    return loss, loss_val, 0.0
+    if return_x0:
+        # eps: recover z_nat_hat = z_t - sigma_fwd * pred (exact inversion of EpsParam target)
+        # x0:  pred already IS z_nat_hat (model.forward adds z_t residual)
+        x0_hat = pred if parameterization == "x0" else z_t_l2 - sigma_fwd * pred
+    else:
+        x0_hat = None
+    return loss, loss_val, 0.0, x0_hat
 
 
 # Registry for DTW special-case variants that bypass the N(t) alpha-timeline path.
@@ -538,6 +546,7 @@ def bridge_loss_dtw(
     alignment: str = "dtw",
     lambda_v: float = 0.0,
     per_sample: bool = False,
+    return_x0: bool = False,
 ) -> tuple:
     """Training loss — DTW-aligned bridge.
 
@@ -575,6 +584,7 @@ def bridge_loss_dtw(
         return _DTW_DISPATCH[dispatch_key](
             model, z_nat, z_acc, t_batch, l2_norm, path_tensor,
             T_l2, sigma_max, parameterization, per_sample, pos, max_len,
+            return_x0=return_x0,
         )
 
     z_t_clean, speech_acc, speech_nat, speech_pos, speech_mask = _build_z_t_clean_dtw(
@@ -603,6 +613,7 @@ def bridge_loss_dtw(
         return _masked_mse(pred, target, sp_mask, per_sample=True)
     loss, loss_val = _masked_mse(pred, target, sp_mask, per_sample=False)
 
+    # DTW alpha-timeline path does not expose x0_hat (CE only used with dtw_fixed)
     # DTW-direction auxiliary loss (x0 only, lambda_v > 0)
     # Penalises the angle between the predicted and true correction directions
     # at each DTW-matched frame pair, weighted by ||dir_true|| so frames with
@@ -642,9 +653,9 @@ def bridge_loss_dtw(
         cos      = F.cosine_similarity(dir_pred, dir_true, dim=-1, eps=1e-8).unsqueeze(-1)
         vel_loss = ((1 - cos) * weight * path_speech).sum() / (weight * path_speech).sum().clamp(min=1e-8)
 
-        return loss + lambda_v * vel_loss, loss_val, vel_loss.item()
+        return loss + lambda_v * vel_loss, loss_val, vel_loss.item(), None
 
-    return loss, loss_val, 0.0
+    return loss, loss_val, 0.0, None
 
 
 # ---------------------------------------------------------------------------

@@ -25,14 +25,14 @@ echo "GPU:  $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
 echo "Track: tail -f ${RUNTIME_LOG}"
 echo "=========================================="
 
-OUT_DIR=models/bridge_dtw_fixed_x0_spanish_0.0
+OUT_DIR=models/bridge_dtw_fixed_eps_0.5
 
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
-    --mapping_train_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_train_spanish_clb.json \
-    --mapping_val_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev_spanish_clb.json \
+    --mapping_train_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_train.json \
+    --mapping_val_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json \
     --alignment       dtw_fixed \
     --cond_acc            \
-    --parameterization x0 \
+    --parameterization eps \
     --out_dir         "${OUT_DIR}" \
     --d_model         768 \
     --dim_feedforward 3072 \
@@ -42,12 +42,13 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --batch_size      16 \
     --lr              1e-4 \
     --weight_decay    1e-4 \
-    --sigma_max       0.0 \
+    --sigma_max       0.5 \
     --num_workers     6 \
     --patience        8 \
-    --lambda_v        0.0 \
     --ema_decay       0.99 \
-    --notes           "v2 data, i2sb style target formulation and training, now with PEs, EMA and batch inference"
+    --notes           "v2 data"
+    # --lambda_ce       0.2 \
+    # --ce_start_epoch  5 \
 
 echo "Training done at $(date)"
 
@@ -55,19 +56,19 @@ echo "=========================================="
 echo "Running evaluation on test set..."
 echo "=========================================="
 
-# echo "SDE SAMPLING..."
-# python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-#     --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test_spanish.json \
-#     --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
-#     --predictor_ckpt models/tnat_predictor/model_best.pt \
-#     --output_dir     results/bridge_eval \
-#     --output_file    "$(basename "${OUT_DIR}").csv" \
-#     --n_steps        100 \
-#     --tnat_buffer    35
+echo "SDE SAMPLING..."
+python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+    --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
+    --predictor_ckpt models/tnat_predictor/model_best.pt \
+    --output_dir     results/bridge_eval \
+    --output_file    "$(basename "${OUT_DIR}").csv" \
+    --n_steps        100 \
+    --tnat_buffer    35
 
 echo "ODE SAMPLING..."
 python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test_spanish.json \
+    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
     --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
     --predictor_ckpt models/tnat_predictor/model_best.pt \
     --output_dir     results/bridge_eval \
@@ -75,5 +76,18 @@ python -m src.experiments.exp2_latent_diffusion_bridge.eval \
     --n_steps        100 \
     --ode_sampling   \
     --tnat_buffer    35
+
+echo "ODE + RENORM SAMPLING..."
+echo "ODE SAMPLING..."
+python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+    --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
+    --predictor_ckpt models/tnat_predictor/model_best.pt \
+    --output_dir     results/bridge_eval \
+    --output_file    "$(basename "${OUT_DIR}")_ode_renorm.csv" \
+    --n_steps        100 \
+    --ode_sampling   \
+    --tnat_buffer    35 \
+    --norm_renorm
 
 echo "Done at $(date)"

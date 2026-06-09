@@ -30,20 +30,21 @@ from .dataset import BridgeDataset
 
 
 def collate_fn(batch):
-    """Stack batch into tensors (position alignment). Returns slot_ids as list of strings."""
-    z_accs, z_nats, l2_ends, nat_ends, slot_ids = zip(*batch)
+    """Stack batch into tensors (position alignment). Returns slot_ids and texts as lists."""
+    z_accs, z_nats, l2_ends, nat_ends, slot_ids, texts = zip(*batch)
     return (
         torch.stack(z_accs),        # [B, 1500, 768]
         torch.stack(z_nats),        # [B, 1500, 768]
         torch.tensor(l2_ends),      # [B]
         torch.tensor(nat_ends),     # [B]
         list(slot_ids),             # [B] list of str — l2_encoder_state_path
+        list(texts),                # [B] list of str — raw transcript
     )
 
 
 def collate_fn_dtw(batch):
-    """Stack tensors and pad DTW paths to [B, max_P, 2] for batched GPU ops. Returns slot_ids."""
-    z_accs, z_nats, l2_ends, nat_ends, paths, slot_ids = zip(*batch)
+    """Stack tensors and pad DTW paths to [B, max_P, 2] for batched GPU ops. Returns slot_ids and texts."""
+    z_accs, z_nats, l2_ends, nat_ends, paths, slot_ids, texts = zip(*batch)
     max_P  = max(len(p) for p in paths)
     padded = np.zeros((len(paths), max_P, 2), dtype=np.int16)
     for i, p in enumerate(paths):
@@ -56,6 +57,7 @@ def collate_fn_dtw(batch):
         torch.tensor(nat_ends),         # [B]
         torch.from_numpy(padded),       # [B, max_P, 2] int16
         list(slot_ids),                 # [B] list of str — l2_encoder_state_path
+        list(texts),                    # [B] list of str — raw transcript
     )
 
 
@@ -131,12 +133,13 @@ def save_config(config_path: Path, **kwargs):
 
 def save_history(history_path: Path, train_losses: list, val_losses: list,
                  train_speech_losses: list = None, val_speech_losses: list = None,
-                 cosine_sims: dict = None):
+                 cosine_sims: dict = None, train_ce_losses: list = None):
     """Save training history to JSON."""
     history = {"train_losses": train_losses, "val_losses": val_losses}
     if train_speech_losses: history["train_speech_losses"] = train_speech_losses
     if val_speech_losses:   history["val_speech_losses"]   = val_speech_losses
     if cosine_sims:         history["cosine_similarities"] = cosine_sims
+    if train_ce_losses:     history["train_ce_losses"]     = train_ce_losses
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
@@ -161,10 +164,11 @@ def plot_losses(plot_path: Path, train_losses: list, val_losses: list):
 
 
 def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="eps",
-                  lambda_v=0.0):
-    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, vel_loss)."""
+                  lambda_v=0.0, return_x0=False):
+    """Dispatch to position or DTW loss. Returns (total_loss, speech_loss, vel_loss, x0_hat).
+    x0_hat is None unless return_x0=True and alignment is dtw_fixed."""
     if alignment.startswith("dtw"):
-        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids = batch
+        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids, _texts = batch
         z_acc          = z_acc.to(device, non_blocking=True)
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
@@ -173,22 +177,23 @@ def _compute_loss(model, batch, device, sigma_max, alignment, parameterization="
         return bridge_loss_dtw(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
                                path_tensor, sigma_max=sigma_max,
                                parameterization=parameterization, alignment=alignment,
-                               lambda_v=lambda_v)
+                               lambda_v=lambda_v, return_x0=return_x0)
     else:
-        z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
+        z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids, _texts = batch
         z_acc          = z_acc.to(device, non_blocking=True)
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
         nat_speech_end = nat_speech_end.to(device, non_blocking=True)
-        return bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
-                           sigma_max=sigma_max, parameterization=parameterization)
+        loss, sp_loss, vel_loss = bridge_loss(model, z_nat, z_acc, l2_speech_end, nat_speech_end,
+                                              sigma_max=sigma_max, parameterization=parameterization)
+        return loss, sp_loss, vel_loss, None
 
 
 def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
                               parameterization="eps") -> torch.Tensor:
     """Return per-sample losses [B] for min-over-natives val computation."""
     if alignment.startswith("dtw"):
-        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids = batch
+        z_acc, z_nat, l2_speech_end, nat_speech_end, path_tensor, _slot_ids, _texts = batch
         z_acc          = z_acc.to(device, non_blocking=True)
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
@@ -199,7 +204,7 @@ def _compute_loss_per_sample(model, batch, device, sigma_max, alignment,
                                parameterization=parameterization, alignment=alignment,
                                per_sample=True)[0]
     else:
-        z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids = batch
+        z_acc, z_nat, l2_speech_end, nat_speech_end, _slot_ids, _texts = batch
         z_acc          = z_acc.to(device, non_blocking=True)
         z_nat          = z_nat.to(device, non_blocking=True)
         l2_speech_end  = l2_speech_end.to(device, non_blocking=True)
@@ -219,37 +224,61 @@ def train_epoch(
     alignment: str = "position",
     parameterization: str = "eps",
     lambda_v: float = 0.0,
-) -> tuple[float, float, float]:
-    """Train for one epoch. Returns (avg_total, avg_speech, avg_vel)."""
+    whisper=None,
+    tokenizer=None,
+    lambda_ce: float = 0.0,
+    ce_start_epoch: int = 5,
+    current_epoch: int = 0,
+) -> tuple[float, float, float, float]:
+    """Train for one epoch. Returns (avg_total, avg_speech, avg_vel, avg_ce)."""
+    from .ce_loss import compute_ce_loss
+
     model.train()
-    total_loss = speech_loss_sum = vel_loss_sum = 0.0
+    total_loss = speech_loss_sum = vel_loss_sum = ce_loss_sum = 0.0
     num_batches = 0
+
+    want_ce = lambda_ce > 0.0 and current_epoch >= ce_start_epoch
 
     pbar = tqdm(train_loader, desc="Training")
     for batch in pbar:
         optimizer.zero_grad()
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            loss, sp_loss, vel_loss = _compute_loss(
-                model, batch, device, sigma_max, alignment, parameterization, lambda_v)
+            loss, sp_loss, vel_loss, x0_hat = _compute_loss(
+                model, batch, device, sigma_max, alignment, parameterization,
+                lambda_v, return_x0=want_ce)
+
+            if want_ce and x0_hat is not None:
+                texts = batch[-1]                              # list[str], last collate element
+                l2_speech_end = batch[2].to(device)           # [B]
+                ce = compute_ce_loss(x0_hat, texts, whisper, tokenizer, l2_speech_end, device)
+                loss = loss + lambda_ce * ce
+                ce_loss_sum += ce.item()
 
         loss.backward()
         clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         ema.update()
 
-        total_loss    += loss.item()
+        total_loss      += loss.item()
         speech_loss_sum += sp_loss
         vel_loss_sum    += vel_loss
-        num_batches += 1
+        num_batches     += 1
 
         postfix = {"loss": f"{loss.item():.4f}", "sp": f"{sp_loss:.4f}"}
         if lambda_v > 0:
             postfix["vl"] = f"{vel_loss:.4f}"
+        if want_ce:
+            postfix["ce"] = f"{ce_loss_sum / num_batches:.4f}"
         pbar.set_postfix(postfix)
 
     pbar.close()
-    return total_loss / num_batches, speech_loss_sum / num_batches, vel_loss_sum / num_batches
+    return (
+        total_loss / num_batches,
+        speech_loss_sum / num_batches,
+        vel_loss_sum / num_batches,
+        ce_loss_sum / num_batches,
+    )
 
 
 def train_epoch_profile(
@@ -377,7 +406,7 @@ def val_epoch(
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
         for batch in pbar:
-            slot_ids = batch[-1]  # list of str, last element from collate_fn / collate_fn_dtw
+            slot_ids = batch[-2]  # index -2: slot_ids; -1 is now texts (added for CE loss)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 per_sample = _compute_loss_per_sample(
                     model, batch, device, sigma_max, alignment, parameterization)
@@ -414,6 +443,8 @@ def train(
     seed: int = 42,
     lambda_v: float = 0.0,
     ema_decay: float = 0.999,
+    lambda_ce: float = 0.0,
+    ce_start_epoch: int = 5,
 ):
     """
     Train the bridge model.
@@ -566,6 +597,8 @@ def train(
         "notes": notes,
         "lambda_v": lambda_v,
         "ema_decay": ema_decay,
+        "lambda_ce": lambda_ce,
+        "ce_start_epoch": ce_start_epoch,
     }
     save_config(out_dir / "config.json", **config)
 
@@ -638,8 +671,21 @@ def train(
             baseline_sim = sim_per.mean().item()
             print(f"[Train] Baseline cosine sim (z_acc vs z_nat, speech frames only): {baseline_sim:.4f}")
 
+    # Load frozen Whisper decoder for CE loss (only when lambda_ce > 0)
+    whisper_for_ce = None
+    tokenizer_for_ce = None
+    if lambda_ce > 0.0:
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+        print(f"[Train] Loading frozen Whisper for CE loss (lambda_ce={lambda_ce}, start_epoch={ce_start_epoch})")
+        whisper_for_ce = WhisperForConditionalGeneration.from_pretrained(
+            "openai/whisper-small", local_files_only=True
+        ).to(device)
+        whisper_for_ce.eval()
+        whisper_for_ce.requires_grad_(False)
+        tokenizer_for_ce = WhisperProcessor.from_pretrained("openai/whisper-small", local_files_only=True)
+
     # Training loop with loss history
-    train_losses = []; train_speech_losses = []
+    train_losses = []; train_speech_losses = []; train_ce_losses = []
     val_losses   = []; val_speech_losses   = []
     cosine_sims = {}
     epochs_no_improve = 0
@@ -652,15 +698,22 @@ def train(
             train_loss = train_epoch_profile(model, train_loader, optimizer, device, sigma_max=sigma_max)
             break  # Profile only runs once
         else:
-            train_loss, tr_sp, tr_vl = train_epoch(
+            train_loss, tr_sp, tr_vl, tr_ce = train_epoch(
                 model, train_loader, optimizer, ema, device,
                 sigma_max=sigma_max, alignment=alignment,
-                parameterization=parameterization, lambda_v=lambda_v)
+                parameterization=parameterization, lambda_v=lambda_v,
+                whisper=whisper_for_ce, tokenizer=tokenizer_for_ce,
+                lambda_ce=lambda_ce, ce_start_epoch=ce_start_epoch,
+                current_epoch=epoch)
         parts = [f"speech={tr_sp:.6f}"]
         if lambda_v > 0:
             parts.append(f"dir={tr_vl:.6f}")
+        if lambda_ce > 0 and epoch >= ce_start_epoch:
+            parts.append(f"ce={tr_ce:.6f}")
         print(f"  Train loss: {train_loss:.6f}  ({',  '.join(parts)})")
         train_losses.append(train_loss); train_speech_losses.append(tr_sp)
+        if lambda_ce > 0:
+            train_ce_losses.append(tr_ce)
 
         # Validate against EMA-averaged weights — keeps "best checkpoint" selection
         # consistent with the smoothed weights eval.py will ultimately deploy.
@@ -757,7 +810,8 @@ def train(
     save_history(out_dir / "history.json", train_losses, val_losses,
                  train_speech_losses=train_speech_losses,
                  val_speech_losses=val_speech_losses,
-                 cosine_sims=cosine_sims if cosine_sims else None)
+                 cosine_sims=cosine_sims if cosine_sims else None,
+                 train_ce_losses=train_ce_losses if train_ce_losses else None)
     plot_losses(out_dir / "losses.png", train_losses, val_losses)
 
     print(f"\n[Train] Complete. Best val loss: {best_val_loss:.6f}")
@@ -826,6 +880,10 @@ if __name__ == "__main__":
                         help="Weight of DTW-velocity auxiliary loss (Branch B; requires --alignment dtw --parameterization x0). 0.0 = disabled.")
     parser.add_argument("--ema_decay", type=float, default=0.999,
                         help="Exponential moving average decay for shadow weights (effective averaging window ~= 1/(1-decay) steps). Standard diffusion practice — see I2SB.")
+    parser.add_argument("--lambda_ce", type=float, default=0.0,
+                        help="Weight of frozen-decoder CE loss. 0.0 (default) disables entirely — no Whisper loaded, no code-path change.")
+    parser.add_argument("--ce_start_epoch", type=int, default=5,
+                        help="Epoch at which CE loss is introduced (0-indexed). Bridge learns correction direction first; CE refines on-manifold quality after.")
 
     args = parser.parse_args()
     if args.out_dir is None:

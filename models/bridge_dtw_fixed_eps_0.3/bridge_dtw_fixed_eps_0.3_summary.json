@@ -1,0 +1,41 @@
+{
+  "wer": 0.15596900569578165,
+  "mer": 0.15239776820396922,
+  "per": 0.09457302524910198,
+  "n_test_utts": 7796,
+  "max_utts_per_speaker": null,
+  "sigma_max": 0.3,
+  "ode_sampling": false,
+  "seed": 42,
+  "per_l1": {
+    "Arabic": {
+      "wer": 0.12555920071577692,
+      "n_utts": 1132
+    },
+    "Chinese": {
+      "wer": 0.18238930993218988,
+      "n_utts": 1130
+    },
+    "English": {
+      "wer": 0.037652713799319046,
+      "n_utts": 1132
+    },
+    "Hindi": {
+      "wer": 0.06214576911603858,
+      "n_utts": 1132
+    },
+    "Korean": {
+      "wer": 0.07941088665538859,
+      "n_utts": 1131
+    },
+    "Spanish": {
+      "wer": 0.22680989146245945,
+      "n_utts": 1007
+    },
+    "Vietnamese": {
+      "wer": 0.38486776695168023,
+      "n_utts": 1132
+    }
+  },
+  "predictions_csv": "results/bridge_eval/bridge_dtw_fixed_eps_0.3.csv"
+}

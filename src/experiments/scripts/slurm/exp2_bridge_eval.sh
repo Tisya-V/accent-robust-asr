@@ -45,21 +45,55 @@ PY
 echo -e "\n\n==============================\n\n"
 echo "Starting Bridge Evaluation..."
 
-MODELS=( "bridge_dtw_fixed_x0_0.5" )
-
+MODELS=( "bridge_dtw_fixed_x0_1.0" "bridge_dtw_fixed_eps_1.0" )
+# REVERT THE CHECKPOINTS TO THE BEST ONES BEFORE RUNNING THIS SCRIPT
 for MODEL in "${MODELS[@]}"; do
+    # echo "SDE inference"
+    # python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+    #     --mapping_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+    #     --bridge_ckpt    models/"$MODEL"/checkpoint_latest.pt \
+    #     --predictor_ckpt models/tnat_predictor/model_best.pt \
+    #     --output_dir     results/bridge_eval \
+    #     --output_file    "$MODEL".csv \
+    #     --n_steps        100 \
+    #     --tnat_buffer   35
+    #     # --max_utts_per_speaker 50 \
+
+    echo "SDE inference with renorm"
     python -m src.experiments.exp2_latent_diffusion_bridge.eval \
         --mapping_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
-        --bridge_ckpt    models/"$MODEL"/checkpoint_best.pt \
+        --bridge_ckpt    models/"$MODEL"/checkpoint_latest.pt \
         --predictor_ckpt models/tnat_predictor/model_best.pt \
         --output_dir     results/bridge_eval \
-        --output_file    "$MODEL"_ode_renorm.csv \
+        --output_file    "$MODEL"_renorm.csv \
         --n_steps        100 \
         --tnat_buffer   35 \
-        --ode_sampling   \
         --norm_renorm   \
-        # --anti_rep_safety \
         # --max_utts_per_speaker 50 \
+
+    # echo "ODE inference without renormalization"
+    # python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+    #     --mapping_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+    #     --bridge_ckpt    models/"$MODEL"/checkpoint_latest.pt \
+    #     --predictor_ckpt models/tnat_predictor/model_best.pt \
+    #     --output_dir     results/bridge_eval \
+    #     --output_file    "$MODEL"_ode.csv \
+    #     --n_steps        100 \
+    #     --tnat_buffer   35 \
+    #     --ode_sampling
+
+    # echo "ODE inference with renormalization"
+    # python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+    #     --mapping_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+    #     --bridge_ckpt    models/"$MODEL"/checkpoint_latest.pt \
+    #     --predictor_ckpt models/tnat_predictor/model_best.pt \
+    #     --output_dir     results/bridge_eval \
+    #     --output_file    "$MODEL"_ode_renorm.csv \
+    #     --n_steps        100 \
+    #     --tnat_buffer   35 \
+    #     --ode_sampling   \
+    #     --norm_renorm   \
+    #     # --max_utts_per_speaker 50 \
 done
 
 echo "✅ Bridge evaluation complete."
