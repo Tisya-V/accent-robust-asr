@@ -25,7 +25,7 @@ echo "GPU:  $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
 echo "Track: tail -f ${RUNTIME_LOG}"
 echo "=========================================="
 
-OUT_DIR=models/bridge_position_eps_1.5
+OUT_DIR=models/bridge_position_eps_0.5
 
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --mapping_train_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_train_v2.json \
@@ -37,11 +37,11 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --d_model 768 \
     --dim_feedforward 3072 \
     --n_heads 12 \
-    --n_epochs     25 \
-    --batch_size   64 \
+    --n_epochs     35 \
+    --batch_size   16 \
     --lr           1e-4 \
     --weight_decay 1e-4 \
-    --sigma_max    1.5 \
+    --sigma_max    0.5 \
     --num_workers  6 \
     --patience     5 \
     --ema_decay      0.99 \
@@ -61,5 +61,17 @@ python -m src.experiments.exp2_latent_diffusion_bridge.eval \
     --output_file    "$(basename "${OUT_DIR}").csv" \
     --n_steps        100 \
     --tnat_buffer    35
+
+echo "ODE + RENORM SAMPLING..."
+python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+    --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
+    --predictor_ckpt models/tnat_predictor/model_best.pt \
+    --output_dir     results/bridge_eval \
+    --output_file    "$(basename "${OUT_DIR}")_ode_renorm.csv" \
+    --n_steps        100 \
+    --ode_sampling   \
+    --tnat_buffer    35 \
+    --norm_renorm
 
 echo "Done at $(date)"

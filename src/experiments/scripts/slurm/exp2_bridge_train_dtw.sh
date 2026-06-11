@@ -25,14 +25,14 @@ echo "GPU:  $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
 echo "Track: tail -f ${RUNTIME_LOG}"
 echo "=========================================="
 
-OUT_DIR=models/bridge_dtw_fixed_eps_0.5
+OUT_DIR=models/bridge_dtw_fixed_x0_0.3_seed67
 
 python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --mapping_train_path src/experiments/exp2_latent_diffusion_bridge/data/mapping_train.json \
     --mapping_val_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_dev.json \
     --alignment       dtw_fixed \
     --cond_acc            \
-    --parameterization eps \
+    --parameterization x0 \
     --out_dir         "${OUT_DIR}" \
     --d_model         768 \
     --dim_feedforward 3072 \
@@ -42,11 +42,12 @@ python -m src.experiments.exp2_latent_diffusion_bridge.train \
     --batch_size      16 \
     --lr              1e-4 \
     --weight_decay    1e-4 \
-    --sigma_max       0.5 \
+    --sigma_max       0.3 \
     --num_workers     6 \
     --patience        8 \
     --ema_decay       0.99 \
-    --notes           "v2 data"
+    --notes           "v2 data, multi-seed exps" \
+    --seed            67
     # --lambda_ce       0.2 \
     # --ce_start_epoch  5 \
 
@@ -56,29 +57,28 @@ echo "=========================================="
 echo "Running evaluation on test set..."
 echo "=========================================="
 
-echo "SDE SAMPLING..."
-python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
-    --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
-    --predictor_ckpt models/tnat_predictor/model_best.pt \
-    --output_dir     results/bridge_eval \
-    --output_file    "$(basename "${OUT_DIR}").csv" \
-    --n_steps        100 \
-    --tnat_buffer    35
+# echo "SDE SAMPLING..."
+# python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+#     --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+#     --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
+#     --predictor_ckpt models/tnat_predictor/model_best.pt \
+#     --output_dir     results/bridge_eval \
+#     --output_file    "$(basename "${OUT_DIR}").csv" \
+#     --n_steps        100 \
+#     --tnat_buffer    35
 
-echo "ODE SAMPLING..."
-python -m src.experiments.exp2_latent_diffusion_bridge.eval \
-    --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
-    --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
-    --predictor_ckpt models/tnat_predictor/model_best.pt \
-    --output_dir     results/bridge_eval \
-    --output_file    "$(basename "${OUT_DIR}")_ode.csv" \
-    --n_steps        100 \
-    --ode_sampling   \
-    --tnat_buffer    35
+# echo "ODE SAMPLING..."
+# python -m src.experiments.exp2_latent_diffusion_bridge.eval \
+#     --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
+#     --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \
+#     --predictor_ckpt models/tnat_predictor/model_best.pt \
+#     --output_dir     results/bridge_eval \
+#     --output_file    "$(basename "${OUT_DIR}")_ode.csv" \
+#     --n_steps        100 \
+#     --ode_sampling   \
+#     --tnat_buffer    35
 
 echo "ODE + RENORM SAMPLING..."
-echo "ODE SAMPLING..."
 python -m src.experiments.exp2_latent_diffusion_bridge.eval \
     --mapping_path   src/experiments/exp2_latent_diffusion_bridge/data/mapping_test.json \
     --bridge_ckpt    "${OUT_DIR}/checkpoint_best.pt" \

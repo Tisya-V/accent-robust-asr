@@ -1,0 +1,25 @@
+model,n,mean_delta_%,ci_lo_%,ci_hi_%,verdict
+bridge_dtw_eps_0.5,7795,3.729,2.013,5.868,✗ sig. degradation
+bridge_dtw_eps_0.5_odesampling,7795,3.485,1.739,5.691,✗ sig. degradation
+bridge_dtw_fixed_eps_0.3,7795,1.157,-0.268,3.251,— inconclusive
+bridge_dtw_fixed_eps_0.3_ode,7795,-0.098,-0.576,0.66,— inconclusive
+bridge_dtw_fixed_eps_0.3_ode_renorm,7795,-0.442,-0.65,-0.233,✓ sig. improvement
+bridge_dtw_fixed_eps_0.5,7795,6.885,3.337,10.96,✗ sig. degradation
+bridge_dtw_fixed_eps_0.5_ode,7795,3.129,0.48,6.47,✗ sig. degradation
+bridge_dtw_fixed_eps_0.5_renorm,7795,5.206,2.089,8.978,✗ sig. degradation
+bridge_dtw_fixed_eps_0.5_ode_renorm,7795,-0.7,-0.906,-0.489,✓ sig. improvement
+bridge_dtw_fixed_eps_1.0,7795,8.197,4.378,12.605,✗ sig. degradation
+bridge_dtw_fixed_eps_1.0_ode,7795,13.809,8.714,19.369,✗ sig. degradation
+bridge_dtw_fixed_eps_1.0_ode_renorm,7795,11.253,6.717,16.323,✗ sig. degradation
+bridge_dtw_fixed_x0_0.0_ode,7795,28.261,21.262,35.659,✗ sig. degradation
+bridge_dtw_fixed_x0_0.0_ode_renorm,7795,10.43,6.184,15.268,✗ sig. degradation
+bridge_dtw_fixed_x0_0.3,7795,20.708,14.916,26.953,✗ sig. degradation
+bridge_dtw_fixed_x0_0.3_ode,7795,14.04,9.035,19.662,✗ sig. degradation
+bridge_dtw_fixed_x0_0.3_ode_renorm,7795,4.184,0.946,8.106,✗ sig. degradation
+bridge_dtw_fixed_x0_0.5,7795,22.984,16.684,30.002,✗ sig. degradation
+bridge_dtw_fixed_x0_0.5_ode,7795,14.625,9.709,20.015,✗ sig. degradation
+bridge_dtw_fixed_x0_0.5_renorm,7795,23.058,16.244,30.526,✗ sig. degradation
+bridge_dtw_fixed_x0_0.5_ode_renorm,7795,3.016,0.588,6.035,✗ sig. degradation
+bridge_dtw_fixed_x0_1.0,7795,25.123,18.306,32.384,✗ sig. degradation
+bridge_dtw_fixed_x0_1.0_ode,7795,16.06,10.177,22.724,✗ sig. degradation
+bridge_dtw_fixed_x0_1.0_ode_renorm,7795,15.735,10.109,21.997,✗ sig. degradation

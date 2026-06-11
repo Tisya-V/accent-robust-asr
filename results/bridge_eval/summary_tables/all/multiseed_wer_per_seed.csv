@@ -1,0 +1,13 @@
+model,seed,n,wer_baseline_%,wer_bridge_%,wer_delta_%,mer_baseline_%,mer_bridge_%,mer_delta_%
+bridge_dtw_fixed_eps_0.3_ode_renorm,42,7796,14.709,14.396,-0.314,14.502,14.215,-0.287
+bridge_dtw_fixed_eps_0.3_ode_renorm,4,7796,14.709,14.527,-0.182,14.502,14.342,-0.16
+bridge_dtw_fixed_eps_0.3_ode_renorm,67,7796,14.709,14.52,-0.189,14.502,14.339,-0.164
+bridge_dtw_fixed_eps_0.5_ode_renorm,42,7796,14.709,14.173,-0.536,14.502,14.002,-0.5
+bridge_dtw_fixed_eps_0.5_ode_renorm,4,7796,14.709,14.031,-0.678,14.502,13.869,-0.633
+bridge_dtw_fixed_eps_0.5_ode_renorm,67,7796,14.709,14.033,-0.677,14.502,13.872,-0.63
+bridge_dtw_fixed_x0_0.3_ode_renorm,42,7796,14.709,18.498,3.789,14.502,17.533,3.031
+bridge_dtw_fixed_x0_0.3_ode_renorm,4,7796,14.709,16.051,1.342,14.502,15.574,1.072
+bridge_dtw_fixed_x0_0.3_ode_renorm,67,7796,14.709,17.576,2.867,14.502,16.811,2.309
+bridge_dtw_fixed_x0_0.5_ode_renorm,42,7796,14.709,18.062,3.352,14.502,17.213,2.711
+bridge_dtw_fixed_x0_0.5_ode_renorm,4,7796,14.709,15.048,0.338,14.502,14.713,0.211
+bridge_dtw_fixed_x0_0.5_ode_renorm,67,7796,14.709,15.812,1.103,14.502,15.373,0.871
