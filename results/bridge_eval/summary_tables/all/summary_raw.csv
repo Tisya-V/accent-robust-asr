@@ -1,4 +1,5 @@
 model,n,utt_wer_baseline_%,utt_wer_bridge_%,utt_wer_delta_%,wins,corrected,improved,draws,draws_zero,draws_nonzero,losses
+bridge_position_eps_0.5,7796,15.4,224.29,208.89,152,44,108,1183,747,436,6460
 bridge_dtw_eps_0.5,7796,15.4,19.15,3.74,635,180,455,5935,3156,2779,1225
 bridge_dtw_eps_0.5_odesampling,7796,15.4,18.89,3.49,607,168,439,6055,3188,2867,1133
 bridge_dtw_fixed_eps_0.3,7796,15.4,16.56,1.16,899,269,630,6033,3235,2798,863
@@ -23,3 +24,5 @@ bridge_dtw_fixed_x0_0.5_ode_renorm,7796,15.4,18.4,3.0,1118,329,789,5768,3203,256
 bridge_dtw_fixed_x0_1.0,7796,15.4,40.48,25.08,1133,406,727,4817,2844,1973,1845
 bridge_dtw_fixed_x0_1.0_ode,7796,15.4,31.46,16.06,1282,440,842,4846,2844,2002,1667
 bridge_dtw_fixed_x0_1.0_ode_renorm,7796,15.4,31.09,15.69,1276,434,842,4867,2850,2017,1652
+bridge_dtw_fixed_x0_0.3_CEloss,7796,15.4,105.47,90.07,406,196,210,1780,1196,584,5609
+bridge_dtw_fixed_x0_0.3_CEloss_ode_renorm,7796,15.4,86.39,70.98,201,88,113,1004,711,293,6590

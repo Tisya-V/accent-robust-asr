@@ -1,4 +1,5 @@
 model,win_%,corrected_%,improved_%,draw_%,draws_zero_%,draws_nonzero_%,loss_%
+bridge_position_eps_0.5,1.95,0.56,1.39,15.17,9.58,5.59,82.86
 bridge_dtw_eps_0.5,8.15,2.31,5.84,76.13,40.48,35.65,15.71
 bridge_dtw_eps_0.5_odesampling,7.79,2.15,5.63,77.67,40.89,36.78,14.53
 bridge_dtw_fixed_eps_0.3,11.53,3.45,8.08,77.39,41.5,35.89,11.07
@@ -23,3 +24,5 @@ bridge_dtw_fixed_x0_0.5_ode_renorm,14.34,4.22,10.12,73.99,41.09,32.9,11.66
 bridge_dtw_fixed_x0_1.0,14.53,5.21,9.33,61.79,36.48,25.31,23.67
 bridge_dtw_fixed_x0_1.0_ode,16.44,5.64,10.8,62.16,36.48,25.68,21.38
 bridge_dtw_fixed_x0_1.0_ode_renorm,16.37,5.57,10.8,62.43,36.56,25.87,21.19
+bridge_dtw_fixed_x0_0.3_CEloss,5.21,2.51,2.69,22.83,15.34,7.49,71.95
+bridge_dtw_fixed_x0_0.3_CEloss_ode_renorm,2.58,1.13,1.45,12.88,9.12,3.76,84.53
